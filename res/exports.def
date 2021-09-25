@@ -465,7 +465,7 @@ EXPORTS
 
 	; dinput8.dll
 	DirectInput8Create PRIVATE
-  GetdfDIJoystick PRIVATE
+	GetdfDIJoystick PRIVATE
 
 	; winmm.dll (winmm.lib)
 	CloseDriver = HookCloseDriver PRIVATE
