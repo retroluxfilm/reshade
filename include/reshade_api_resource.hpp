@@ -152,9 +152,9 @@ namespace reshade { namespace api
 	};
 
 	/// <summary>
-	/// The available filtering types used for texture sampling operations.
+	/// The available filtering modes used for texture sampling operations.
 	/// </summary>
-	enum class filter_type : uint32_t
+	enum class filter_mode : uint32_t
 	{
 		min_mag_mip_point = 0,
 		min_mag_point_mip_linear = 0x1,
@@ -193,14 +193,25 @@ namespace reshade { namespace api
 	/// </summary>
 	struct sampler_desc
 	{
-		filter_type filter;
+		/// <summary>Filtering mode to use when sampling a texture.</summary>
+		filter_mode filter;
+		/// <summary>Method to use for resolving U texture coordinates outside 0 to 1 range.</summary>
 		texture_address_mode address_u;
+		/// <summary>Method to use for resolving V texture coordinates outside 0 to 1 range.</summary>
 		texture_address_mode address_v;
+		/// <summary>Method to use for resolving W texture coordinates outside 0 to 1 range.</summary>
 		texture_address_mode address_w;
+		/// <summary>Offset applied to the calculated mipmap level when sampling a texture.</summary>
 		float mip_lod_bias;
+		/// <summary>Clamping value to use when filtering mode is <see cref="filter_mode::anisotropic"/>.</summary>
 		float max_anisotropy;
+		/// <summary>Comparison function to use to compare sampled data against existing sampled data.</summary>
 		compare_op compare_op;
+		/// <summary>Color to return for texture coordinates outside 0 to 1 range when addressing mode is <see cref="texture_address_mode::border"/>.</summary>
+		float border_color[4];
+		/// <summary>Lower end of the mipmap range to clamp access to.</summary>
 		float min_lod;
+		/// <summary>Upper end of the mipmap range to clamp access to.</summary>
 		float max_lod;
 	};
 
@@ -255,7 +266,7 @@ namespace reshade { namespace api
 			} texture;
 		};
 
-		/// <summary>The heap the resource allocation is placed in.</summary>
+		/// <summary>Memory heap the resource allocation is placed in.</summary>
 		memory_heap heap;
 		/// <summary>Flags that specify how this resource may be used.</summary>
 		resource_usage usage;
@@ -279,7 +290,8 @@ namespace reshade { namespace api
 		explicit resource_view_desc(format format) :
 			type(resource_view_type::texture_2d), format(format), texture({ 0, 1, 0, 1 }) {}
 
-		/// <summary>Type of the view. Identifies how the view should interpret the resource data.</summary>
+		/// <summary>Type of the view.
+		/// Identifies how the view should interpret the resource data.</summary>
 		resource_view_type type;
 		/// <summary>Viewing format of this view. 
 		/// The data of the resource is reinterpreted to this format (can be different than the format of the underlying resource as long as the formats are compatible).</summary>
@@ -307,12 +319,12 @@ namespace reshade { namespace api
 				uint32_t first_level;
 				/// <summary>Maximum number of mipmap levels for the view of the texture.
 				/// Set to -1 (0xFFFFFFFF) to indicate that all mipmap levels down to the least detailed should be used.</summary>
-				uint32_t levels;
+				uint32_t level_count;
 				/// <summary>Index of the first array layer of the texture array to use. This value is ignored if the texture is not layered.</summary>
 				uint32_t first_layer;
 				/// <summary>Maximum number of array layers for the view of the texture array. This value is ignored if the texture is not layered.
 				/// Set to -1 (0xFFFFFFFF) to indicate that all array layers should be used.</summary>
-				uint32_t layers;
+				uint32_t layer_count;
 			} texture;
 		};
 	};
@@ -324,9 +336,9 @@ namespace reshade { namespace api
 	{
 		/// <summary>Pointer to the data.</summary>
 		void *data;
-		/// <summary>The row pitch of the data (added to the data pointer to move between texture rows, unused for buffers and 1D textures).</summary>
+		/// <summary>Row pitch of the data (added to the data pointer to move between texture rows, unused for buffers and 1D textures).</summary>
 		uint32_t row_pitch;
-		/// <summary>The depth pitch of the data (added to the data pointer to move between texture depth/array slices, unused for buffers and 1D/2D textures).</summary>
+		/// <summary>Depth pitch of the data (added to the data pointer to move between texture depth/array slices, unused for buffers and 1D/2D textures).</summary>
 		uint32_t slice_pitch;
 	};
 
@@ -339,7 +351,6 @@ namespace reshade { namespace api
 	/// <summary>
 	/// An opaque handle to a resource object (buffer, texture, ...).
 	/// <para>Resources created by the application are only guaranteed to be valid during event callbacks.
-	/// If you want to use one outside that scope, first ensure the resource is still valid via <see cref="device::check_resource_handle_valid"/>.</para>
 	/// <para>Depending on the render API this can be a pointer to a 'IDirect3DResource9', 'ID3D10Resource', 'ID3D11Resource' or 'ID3D12Resource' object or a 'VkImage' handle.</para>
 	/// </summary>
 	RESHADE_DEFINE_HANDLE(resource);
@@ -347,7 +358,6 @@ namespace reshade { namespace api
 	/// <summary>
 	/// An opaque handle to a resource view object (depth-stencil, render target, shader resource view, ...).
 	/// <para>Resource views created by the application are only guaranteed to be valid during event callbacks.
-	/// If you want to use one outside that scope, first ensure the resource view is still valid via <see cref="device::is_resource_view_handle_valid"/>.</para>
 	/// <para>Depending on the render API this can be a pointer to a 'IDirect3DResource9', 'ID3D10View' or 'ID3D11View' object, or a 'D3D12_CPU_DESCRIPTOR_HANDLE' (to a view descriptor) or 'VkImageView' handle.</para>
 	/// </summary>
 	RESHADE_DEFINE_HANDLE(resource_view);

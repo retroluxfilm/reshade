@@ -14,7 +14,7 @@ namespace reshade::opengl
 	class swapchain_impl : public device_impl, public runtime
 	{
 	public:
-		swapchain_impl(HDC hdc, HGLRC hglrc);
+		swapchain_impl(HDC hdc, HGLRC hglrc, bool compatibility_context = false);
 		~swapchain_impl();
 
 		bool get_user_data(const uint8_t guid[16], void **ptr) const final { return device_impl::get_user_data(guid, ptr); }
@@ -22,8 +22,8 @@ namespace reshade::opengl
 
 		uint64_t get_native_object() const final { return reinterpret_cast<uintptr_t>(*_hdcs.begin()); } // Simply return the first device context
 
-		void get_back_buffer(uint32_t index, api::resource *out) final;
-		void get_back_buffer_resolved(uint32_t index, api::resource *out) final;
+		api::resource get_back_buffer(uint32_t index) final;
+		api::resource get_back_buffer_resolved(uint32_t index) final;
 
 		uint32_t get_back_buffer_count() const final { return 1; }
 		uint32_t get_current_back_buffer_index() const final { return 0; }

@@ -3,7 +3,6 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "dll_log.hpp"
 #include "dxgi_swapchain.hpp"
 #include "d3d10/d3d10_device.hpp"
 #include "d3d10/d3d10_impl_swapchain.hpp"
@@ -13,6 +12,7 @@
 #include "d3d12/d3d12_device.hpp"
 #include "d3d12/d3d12_command_queue.hpp"
 #include "d3d12/d3d12_impl_swapchain.hpp"
+#include "dll_log.hpp" // Include late to get HRESULT log overloads
 
 extern UINT query_device(IUnknown *&device, com_ptr<IUnknown> &device_proxy);
 
@@ -119,7 +119,7 @@ void DXGISwapChain::runtime_present(UINT flags)
 	if (flags & DXGI_PRESENT_TEST)
 		return;
 
-	// Synchronize access to effect runtime to avoid race conditions between 'load_effects' and 'unload_effects' causing crashes
+	// Synchronize access to effect runtime to avoid race conditions between 'load_effects' and 'destroy_effects' causing crashes
 	// This is necessary because Resident Evil 3 calls DXGI functions simultaneously from multiple threads (which is technically illegal)
 	const std::unique_lock<std::mutex> lock(_impl_mutex);
 

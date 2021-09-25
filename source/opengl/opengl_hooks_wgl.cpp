@@ -688,13 +688,11 @@ HOOK_EXPORT BOOL  WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
 		{
 			assert(s_hooks_installed);
 
-			const auto runtime = new reshade::opengl::swapchain_impl(hdc, hglrc);
-			runtime->_hdcs.insert(hdc);
-
-			// Always set compatibility context flag on contexts that were created with 'wglCreateContext' instead of 'wglCreateContextAttribsARB'
-			// This is necessary because with some pixel formats the 'GL_ARB_compatibility' extension is not exposed even though the context was not created with the core profile
-			if (s_legacy_contexts.find(hglrc) != s_legacy_contexts.end())
-				runtime->_compatibility_context = true;
+			const auto runtime = new reshade::opengl::swapchain_impl(
+				hdc, hglrc,
+				// Always set compatibility context flag on contexts that were created with 'wglCreateContext' instead of 'wglCreateContextAttribsARB'
+				// This is necessary because with some pixel formats the 'GL_ARB_compatibility' extension is not exposed even though the context was not created with the core profile
+				s_legacy_contexts.find(hglrc) != s_legacy_contexts.end());
 
 			g_current_context = s_opengl_contexts[hglrc] = runtime;
 
@@ -870,7 +868,7 @@ HOOK_EXPORT BOOL  WINAPI wglSwapBuffers(HDC hdc)
 #endif
 
 		uint32_t runtime_width = 0, runtime_height = 0;
-		runtime->get_frame_width_and_height(&runtime_width, &runtime_height);
+		runtime->get_screenshot_width_and_height(&runtime_width, &runtime_height);
 
 		const auto width = static_cast<unsigned int>(rect.right);
 		const auto height = static_cast<unsigned int>(rect.bottom);

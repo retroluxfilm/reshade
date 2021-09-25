@@ -3,6 +3,7 @@
  * License: https://github.com/crosire/reshade#license
  */
 
+#include "vulkan_hooks.hpp"
 #include "vulkan_impl_device.hpp"
 #include "vulkan_impl_type_convert.hpp"
 
@@ -538,7 +539,7 @@ void reshade::vulkan::convert_usage_to_image_usage_flags(api::resource_usage usa
 	else
 		image_flags &= ~VK_IMAGE_USAGE_STORAGE_BIT;
 }
-void reshade::vulkan::convert_image_usage_flags_to_usage(const VkImageUsageFlags image_flags, reshade::api::resource_usage &usage)
+void reshade::vulkan::convert_image_usage_flags_to_usage(const VkImageUsageFlags image_flags, api::resource_usage &usage)
 {
 	using namespace reshade;
 
@@ -572,10 +573,15 @@ void reshade::vulkan::convert_usage_to_buffer_usage_flags(api::resource_usage us
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-	if ((usage & api::resource_usage::unordered_access) != api::resource_usage::undefined)
-		buffer_flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	if ((usage & api::resource_usage::shader_resource) != api::resource_usage::undefined)
+		buffer_flags |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
 	else
-		buffer_flags &= ~VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		buffer_flags &= ~VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+
+	if ((usage & api::resource_usage::unordered_access) != api::resource_usage::undefined)
+		buffer_flags |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	else
+		buffer_flags &= ~(VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
 	if ((usage & api::resource_usage::copy_dest) != api::resource_usage::undefined)
 		buffer_flags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -587,7 +593,7 @@ void reshade::vulkan::convert_usage_to_buffer_usage_flags(api::resource_usage us
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 }
-void reshade::vulkan::convert_buffer_usage_flags_to_usage(const VkBufferUsageFlags buffer_flags, reshade::api::resource_usage &usage)
+void reshade::vulkan::convert_buffer_usage_flags_to_usage(const VkBufferUsageFlags buffer_flags, api::resource_usage &usage)
 {
 	using namespace reshade;
 
@@ -597,6 +603,10 @@ void reshade::vulkan::convert_buffer_usage_flags_to_usage(const VkBufferUsageFla
 		usage |= api::resource_usage::vertex_buffer;
 	if ((buffer_flags & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) != 0)
 		usage |= api::resource_usage::constant_buffer;
+	if ((buffer_flags & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT) != 0)
+		usage |= api::resource_usage::shader_resource;
+	if ((buffer_flags & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) != 0)
+		usage |= api::resource_usage::unordered_access;
 	if ((buffer_flags & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0)
 		usage |= api::resource_usage::unordered_access;
 	if ((buffer_flags & VK_BUFFER_USAGE_TRANSFER_DST_BIT) != 0)
@@ -611,82 +621,82 @@ void reshade::vulkan::convert_sampler_desc(const api::sampler_desc &desc, VkSamp
 
 	switch (desc.filter)
 	{
-	case api::filter_type::compare_min_mag_mip_point:
+	case api::filter_mode::compare_min_mag_mip_point:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_mag_mip_point:
+	case api::filter_mode::min_mag_mip_point:
 		create_info.minFilter = VK_FILTER_NEAREST;
 		create_info.magFilter = VK_FILTER_NEAREST;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_min_mag_point_mip_linear:
+	case api::filter_mode::compare_min_mag_point_mip_linear:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_mag_point_mip_linear:
+	case api::filter_mode::min_mag_point_mip_linear:
 		create_info.magFilter = VK_FILTER_NEAREST;
 		create_info.minFilter = VK_FILTER_NEAREST;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_min_point_mag_linear_mip_point:
+	case api::filter_mode::compare_min_point_mag_linear_mip_point:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_point_mag_linear_mip_point:
+	case api::filter_mode::min_point_mag_linear_mip_point:
 		create_info.magFilter = VK_FILTER_LINEAR;
 		create_info.minFilter = VK_FILTER_NEAREST;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_min_point_mag_mip_linear:
+	case api::filter_mode::compare_min_point_mag_mip_linear:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_point_mag_mip_linear:
+	case api::filter_mode::min_point_mag_mip_linear:
 		create_info.magFilter = VK_FILTER_LINEAR;
 		create_info.minFilter = VK_FILTER_NEAREST;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_min_linear_mag_mip_point:
+	case api::filter_mode::compare_min_linear_mag_mip_point:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_linear_mag_mip_point:
+	case api::filter_mode::min_linear_mag_mip_point:
 		create_info.magFilter = VK_FILTER_NEAREST;
 		create_info.minFilter = VK_FILTER_LINEAR;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_min_linear_mag_point_mip_linear:
+	case api::filter_mode::compare_min_linear_mag_point_mip_linear:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_linear_mag_point_mip_linear:
+	case api::filter_mode::min_linear_mag_point_mip_linear:
 		create_info.magFilter = VK_FILTER_NEAREST;
 		create_info.minFilter = VK_FILTER_LINEAR;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_min_mag_linear_mip_point:
+	case api::filter_mode::compare_min_mag_linear_mip_point:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_mag_linear_mip_point:
+	case api::filter_mode::min_mag_linear_mip_point:
 		create_info.magFilter = VK_FILTER_LINEAR;
 		create_info.minFilter = VK_FILTER_LINEAR;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_min_mag_mip_linear:
+	case api::filter_mode::compare_min_mag_mip_linear:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::min_mag_mip_linear:
+	case api::filter_mode::min_mag_mip_linear:
 		create_info.magFilter = VK_FILTER_LINEAR;
 		create_info.minFilter = VK_FILTER_LINEAR;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		create_info.anisotropyEnable = VK_FALSE;
 		break;
-	case api::filter_type::compare_anisotropic:
+	case api::filter_mode::compare_anisotropic:
 		create_info.compareEnable = VK_TRUE;
 		[[fallthrough]];
-	case api::filter_type::anisotropic:
+	case api::filter_mode::anisotropic:
 		create_info.magFilter = VK_FILTER_LINEAR;
 		create_info.minFilter = VK_FILTER_LINEAR;
 		create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
@@ -721,13 +731,21 @@ void reshade::vulkan::convert_sampler_desc(const api::sampler_desc &desc, VkSamp
 	create_info.compareOp = convert_compare_op(desc.compare_op);
 	create_info.minLod = desc.min_lod;
 	create_info.maxLod = desc.max_lod;
+
+	const auto border_color_info = const_cast<VkSamplerCustomBorderColorCreateInfoEXT *>(find_in_structure_chain<VkSamplerCustomBorderColorCreateInfoEXT>(
+		create_info.pNext, VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT));
+
+	if (border_color_info != nullptr && create_info.borderColor == VK_BORDER_COLOR_FLOAT_CUSTOM_EXT)
+	{
+		std::copy_n(desc.border_color, 4, border_color_info->customBorderColor.float32);
+	}
 }
 reshade::api::sampler_desc reshade::vulkan::convert_sampler_desc(const VkSamplerCreateInfo &create_info)
 {
 	api::sampler_desc desc = {};
 	if (create_info.anisotropyEnable)
 	{
-		desc.filter = api::filter_type::anisotropic;
+		desc.filter = api::filter_mode::anisotropic;
 	}
 	else
 	{
@@ -740,10 +758,10 @@ reshade::api::sampler_desc reshade::vulkan::convert_sampler_desc(const VkSampler
 				switch (create_info.mipmapMode)
 				{
 				case VK_SAMPLER_MIPMAP_MODE_NEAREST:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_mag_mip_point : api::filter_type::min_mag_mip_point;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_mag_mip_point : api::filter_mode::min_mag_mip_point;
 					break;
 				case VK_SAMPLER_MIPMAP_MODE_LINEAR:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_mag_point_mip_linear : api::filter_type::min_mag_point_mip_linear;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_mag_point_mip_linear : api::filter_mode::min_mag_point_mip_linear;
 					break;
 				}
 				break;
@@ -751,10 +769,10 @@ reshade::api::sampler_desc reshade::vulkan::convert_sampler_desc(const VkSampler
 				switch (create_info.mipmapMode)
 				{
 				case VK_SAMPLER_MIPMAP_MODE_NEAREST:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_point_mag_linear_mip_point : api::filter_type::min_point_mag_linear_mip_point;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_point_mag_linear_mip_point : api::filter_mode::min_point_mag_linear_mip_point;
 					break;
 				case VK_SAMPLER_MIPMAP_MODE_LINEAR:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_point_mag_mip_linear : api::filter_type::min_point_mag_mip_linear;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_point_mag_mip_linear : api::filter_mode::min_point_mag_mip_linear;
 					break;
 				}
 				break;
@@ -767,10 +785,10 @@ reshade::api::sampler_desc reshade::vulkan::convert_sampler_desc(const VkSampler
 				switch (create_info.mipmapMode)
 				{
 				case VK_SAMPLER_MIPMAP_MODE_NEAREST:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_linear_mag_mip_point : api::filter_type::min_linear_mag_mip_point;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_linear_mag_mip_point : api::filter_mode::min_linear_mag_mip_point;
 					break;
 				case VK_SAMPLER_MIPMAP_MODE_LINEAR:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_linear_mag_point_mip_linear : api::filter_type::min_linear_mag_point_mip_linear;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_linear_mag_point_mip_linear : api::filter_mode::min_linear_mag_point_mip_linear;
 					break;
 				}
 				break;
@@ -778,10 +796,10 @@ reshade::api::sampler_desc reshade::vulkan::convert_sampler_desc(const VkSampler
 				switch (create_info.mipmapMode)
 				{
 				case VK_SAMPLER_MIPMAP_MODE_NEAREST:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_mag_linear_mip_point : api::filter_type::min_mag_linear_mip_point;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_mag_linear_mip_point : api::filter_mode::min_mag_linear_mip_point;
 					break;
 				case VK_SAMPLER_MIPMAP_MODE_LINEAR:
-					desc.filter = create_info.compareEnable ? api::filter_type::compare_min_mag_mip_linear : api::filter_type::min_mag_mip_linear;
+					desc.filter = create_info.compareEnable ? api::filter_mode::compare_min_mag_mip_linear : api::filter_mode::min_mag_mip_linear;
 					break;
 				}
 				break;
@@ -817,6 +835,33 @@ reshade::api::sampler_desc reshade::vulkan::convert_sampler_desc(const VkSampler
 	desc.compare_op = convert_compare_op(create_info.compareOp);
 	desc.min_lod = create_info.minLod;
 	desc.max_lod = create_info.maxLod;
+
+	const auto border_color_info = find_in_structure_chain<VkSamplerCustomBorderColorCreateInfoEXT>(
+		create_info.pNext, VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT);
+
+	switch (create_info.borderColor)
+	{
+	case VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK:
+	case VK_BORDER_COLOR_INT_TRANSPARENT_BLACK:
+		break;
+	case VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK:
+	case VK_BORDER_COLOR_INT_OPAQUE_BLACK:
+		desc.border_color[3] = 1.0f;
+		break;
+	case VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE:
+	case VK_BORDER_COLOR_INT_OPAQUE_WHITE:
+		std::fill_n(desc.border_color, 4, 1.0f);
+		break;
+	case VK_BORDER_COLOR_FLOAT_CUSTOM_EXT:
+		assert(border_color_info != nullptr);
+		std::copy_n(border_color_info->customBorderColor.float32, 4, desc.border_color);
+		break;
+	case VK_BORDER_COLOR_INT_CUSTOM_EXT:
+		assert(border_color_info != nullptr);
+		for (int i = 0; i < 4; ++i)
+			desc.border_color[i] = border_color_info->customBorderColor.int32[i] / 255.0f;
+		break;
+	}
 
 	return desc;
 }
@@ -989,9 +1034,9 @@ void reshade::vulkan::convert_resource_view_desc(const api::resource_view_desc &
 		create_info.format = format;
 
 	create_info.subresourceRange.baseMipLevel = desc.texture.first_level;
-	create_info.subresourceRange.levelCount = desc.texture.levels;
+	create_info.subresourceRange.levelCount = desc.texture.level_count;
 	create_info.subresourceRange.baseArrayLayer = desc.texture.first_layer;
-	create_info.subresourceRange.layerCount = desc.texture.layers;
+	create_info.subresourceRange.layerCount = desc.texture.layer_count;
 }
 void reshade::vulkan::convert_resource_view_desc(const api::resource_view_desc &desc, VkBufferViewCreateInfo &create_info)
 {
@@ -1038,9 +1083,9 @@ reshade::api::resource_view_desc reshade::vulkan::convert_resource_view_desc(con
 
 	desc.format = convert_format(create_info.format);
 	desc.texture.first_level = create_info.subresourceRange.baseMipLevel;
-	desc.texture.levels = create_info.subresourceRange.levelCount;
+	desc.texture.level_count = create_info.subresourceRange.levelCount;
 	desc.texture.first_layer = create_info.subresourceRange.baseArrayLayer;
-	desc.texture.layers = create_info.subresourceRange.layerCount;
+	desc.texture.layer_count = create_info.subresourceRange.layerCount;
 
 	return desc;
 }
@@ -1059,14 +1104,13 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 	api::pipeline_desc desc = { api::pipeline_stage::all_compute };
 	desc.layout = { (uint64_t)create_info.layout };
 
+	const auto module_data = get_user_data_for_object<VK_OBJECT_TYPE_SHADER_MODULE>(create_info.stage.module);
+
 	assert(create_info.stage.stage == VK_SHADER_STAGE_COMPUTE_BIT);
-	desc.compute.shader.format = api::shader_format::spirv;
+
+	desc.compute.shader.code = module_data->spirv.data();
+	desc.compute.shader.code_size = module_data->spirv.size();
 	desc.compute.shader.entry_point = create_info.stage.pName;
-
-	shader_module_data module_data = get_native_object_data<shader_module_data>((uint64_t)create_info.stage.module);
-
-	desc.compute.shader.code = module_data.spirv;
-	desc.compute.shader.code_size = module_data.spirv_size;
 
 	return desc;
 }
@@ -1081,40 +1125,35 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 	{
 		const VkPipelineShaderStageCreateInfo &stage = create_info.pStages[i];
 
-		shader_module_data module_data = get_native_object_data<shader_module_data>((uint64_t)stage.module);
+		const auto module_data = get_user_data_for_object<VK_OBJECT_TYPE_SHADER_MODULE>(stage.module);
 
 		switch (stage.stage)
 		{
 		case VK_SHADER_STAGE_VERTEX_BIT:
-			desc.graphics.vertex_shader.code = module_data.spirv;
-			desc.graphics.vertex_shader.code_size = module_data.spirv_size;
-			desc.graphics.vertex_shader.format = api::shader_format::spirv;
+			desc.graphics.vertex_shader.code = module_data->spirv.data();
+			desc.graphics.vertex_shader.code_size = module_data->spirv.size();
 			desc.graphics.vertex_shader.entry_point = stage.pName;
 			break;
 		case VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
 			has_tessellation_shader_stage = true;
-			desc.graphics.hull_shader.code = module_data.spirv;
-			desc.graphics.hull_shader.code_size = module_data.spirv_size;
-			desc.graphics.hull_shader.format = api::shader_format::spirv;
+			desc.graphics.hull_shader.code = module_data->spirv.data();
+			desc.graphics.hull_shader.code_size = module_data->spirv.size();
 			desc.graphics.hull_shader.entry_point = stage.pName;
 			break;
 		case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
 			has_tessellation_shader_stage = true;
-			desc.graphics.domain_shader.code = module_data.spirv;
-			desc.graphics.domain_shader.code_size = module_data.spirv_size;
-			desc.graphics.domain_shader.format = api::shader_format::spirv;
+			desc.graphics.domain_shader.code = module_data->spirv.data();
+			desc.graphics.domain_shader.code_size = module_data->spirv.size();
 			desc.graphics.domain_shader.entry_point = stage.pName;
 			break;
 		case VK_SHADER_STAGE_GEOMETRY_BIT:
-			desc.graphics.geometry_shader.code = module_data.spirv;
-			desc.graphics.geometry_shader.code_size = module_data.spirv_size;
-			desc.graphics.geometry_shader.format = api::shader_format::spirv;
+			desc.graphics.geometry_shader.code = module_data->spirv.data();
+			desc.graphics.geometry_shader.code_size = module_data->spirv.size();
 			desc.graphics.geometry_shader.entry_point = stage.pName;
 			break;
 		case VK_SHADER_STAGE_FRAGMENT_BIT:
-			desc.graphics.pixel_shader.code = module_data.spirv;
-			desc.graphics.pixel_shader.code_size = module_data.spirv_size;
-			desc.graphics.pixel_shader.format = api::shader_format::spirv;
+			desc.graphics.pixel_shader.code = module_data->spirv.data();
+			desc.graphics.pixel_shader.code_size = module_data->spirv.size();
 			desc.graphics.pixel_shader.entry_point = stage.pName;
 			break;
 		}
@@ -1187,7 +1226,6 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 	{
 		const VkPipelineMultisampleStateCreateInfo &multisample_state_info = *create_info.pMultisampleState;
 
-		desc.graphics.sample_count = static_cast<uint32_t>(multisample_state_info.rasterizationSamples);
 		desc.graphics.blend_state.alpha_to_coverage_enable = multisample_state_info.alphaToCoverageEnable;
 		desc.graphics.rasterizer_state.multisample_enable = multisample_state_info.rasterizationSamples != VK_SAMPLE_COUNT_1_BIT;
 
@@ -1488,15 +1526,62 @@ auto reshade::vulkan::convert_query_type(api::query_type type) -> VkQueryType
 {
 	switch (type)
 	{
-	case reshade::api::query_type::occlusion:
-	case reshade::api::query_type::binary_occlusion:
+	case api::query_type::occlusion:
+	case api::query_type::binary_occlusion:
 		return VK_QUERY_TYPE_OCCLUSION;
-	case reshade::api::query_type::timestamp:
+	case api::query_type::timestamp:
 		return VK_QUERY_TYPE_TIMESTAMP;
-	case reshade::api::query_type::pipeline_statistics:
+	case api::query_type::pipeline_statistics:
 		return VK_QUERY_TYPE_PIPELINE_STATISTICS;
 	default:
 		assert(false);
 		return VK_QUERY_TYPE_MAX_ENUM;
+	}
+}
+auto reshade::vulkan::convert_descriptor_type(api::descriptor_type value, bool is_image) -> VkDescriptorType
+{
+	switch (value)
+	{
+	case api::descriptor_type::sampler:
+		return VK_DESCRIPTOR_TYPE_SAMPLER;
+	case api::descriptor_type::sampler_with_resource_view:
+		assert(is_image);
+		return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	case api::descriptor_type::shader_resource_view:
+		return is_image ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+	case api::descriptor_type::unordered_access_view:
+		return is_image ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+	case api::descriptor_type::constant_buffer:
+		return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	case api::descriptor_type::shader_storage_buffer:
+		return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	default:
+		assert(false);
+		return static_cast<VkDescriptorType>(value);
+	}
+}
+auto reshade::vulkan::convert_descriptor_type(VkDescriptorType value) -> api::descriptor_type
+{
+	switch (value)
+	{
+	case VK_DESCRIPTOR_TYPE_SAMPLER:
+		return api::descriptor_type::sampler;
+	case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+		return api::descriptor_type::sampler_with_resource_view;
+	case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+	case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+		return api::descriptor_type::shader_resource_view;
+	case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+	case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+		return api::descriptor_type::unordered_access_view;
+	case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+	case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+		return api::descriptor_type::constant_buffer;
+	case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+	case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+		return api::descriptor_type::shader_storage_buffer;
+	default:
+		assert(false);
+		return static_cast<api::descriptor_type>(value);
 	}
 }

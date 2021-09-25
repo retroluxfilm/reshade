@@ -3,12 +3,12 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "dll_log.hpp"
-#include "ini_file.hpp"
-#include "hook_manager.hpp"
 #include "d3d9_device.hpp"
 #include "d3d9_swapchain.hpp"
 #include "d3d9_impl_type_convert.hpp"
+#include "dll_log.hpp" // Include late to get HRESULT log overloads
+#include "ini_file.hpp"
+#include "hook_manager.hpp"
 
 // These are defined in d3d9.h, but we want to use them as function names below
 #undef IDirect3D9_CreateDevice
@@ -150,7 +150,7 @@ static void init_device_proxy(T *&device, D3DDEVTYPE device_type, const D3DPRESE
 		device->SetSoftwareVertexProcessing(TRUE);
 
 #if 0
-	// TODO: Make this configurable, since it prevents ReShade from being applied to video players.
+	// TODO: Make this configurable, since it prevents ReShade from being applied to video players
 	if (pp.Flags & D3DPRESENTFLAG_VIDEO)
 	{
 		LOG(WARN) << "Skipping device because it uses a video swap chain.";

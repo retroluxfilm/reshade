@@ -3,16 +3,17 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "dll_log.hpp"
 #include "d3d12_impl_device.hpp"
 #include "d3d12_impl_command_queue.hpp"
+#include "dll_log.hpp"
 
 extern void encode_pix3blob(UINT64(&pix3blob)[64], const char *label, const float color[4]);
 
 reshade::d3d12::command_queue_impl::command_queue_impl(device_impl *device, ID3D12CommandQueue *queue) :
 	api_object_impl(queue), _device_impl(device)
 {
-	// Register queue to device (TODO: Technically need to lock here, since queues may be created on multiple threads simultaneously via 'ID3D12Device::CreateCommandQueue')
+	// Register queue to device
+	// Technically need to lock here, since queues may be created on multiple threads simultaneously via 'ID3D12Device::CreateCommandQueue', but it is unlikely an application actually does that
 	_device_impl->_queues.push_back(this);
 
 	// Only create an immediate command list for graphics queues (since the implemented commands do not work on other queue types)

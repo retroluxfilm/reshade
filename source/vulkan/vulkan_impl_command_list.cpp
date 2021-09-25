@@ -6,6 +6,7 @@
 #include "vulkan_impl_device.hpp"
 #include "vulkan_impl_command_list.hpp"
 #include "vulkan_impl_type_convert.hpp"
+#include <malloc.h>
 #include <algorithm>
 
 #define vk _device_impl->_dispatch_table
@@ -48,21 +49,20 @@ void reshade::vulkan::command_list_impl::barrier(uint32_t count, const api::reso
 
 	_has_commands = true;
 
-	std::vector<VkImageMemoryBarrier> image_barriers;
-	image_barriers.reserve(count);
-	std::vector<VkBufferMemoryBarrier> buffer_barriers;
-	buffer_barriers.reserve(count);
+	uint32_t num_image_barriers = 0;
+	const auto image_barriers = static_cast<VkImageMemoryBarrier *>(_malloca(count * sizeof(VkImageMemoryBarrier)));
+	uint32_t num_buffer_barriers = 0;
+	const auto buffer_barriers = static_cast<VkBufferMemoryBarrier *>(_malloca(count * sizeof(VkBufferMemoryBarrier)));
 
 	VkPipelineStageFlags src_stage_mask = 0;
 	VkPipelineStageFlags dst_stage_mask = 0;
 
 	for (uint32_t i = 0; i < count; ++i)
 	{
-		const resource_data data = _device_impl->get_native_object_data<resource_data>(resources[i].handle);
-
-		if (data.is_image())
+		const auto data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resources[i].handle);
+		if (data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
 		{
-			VkImageMemoryBarrier &transition = image_barriers.emplace_back();
+			VkImageMemoryBarrier &transition = image_barriers[num_image_barriers++];
 			transition = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
 			transition.srcAccessMask = convert_usage_to_access(old_states[i]);
 			transition.dstAccessMask = convert_usage_to_access(new_states[i]);
@@ -71,11 +71,11 @@ void reshade::vulkan::command_list_impl::barrier(uint32_t count, const api::reso
 			transition.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			transition.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			transition.image = (VkImage)resources[i].handle;
-			transition.subresourceRange = { aspect_flags_from_format(data.image_create_info.format), 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+			transition.subresourceRange = { aspect_flags_from_format(data->create_info.format), 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
 		}
 		else
 		{
-			VkBufferMemoryBarrier &transition = buffer_barriers.emplace_back();
+			VkBufferMemoryBarrier &transition = buffer_barriers[num_buffer_barriers++];
 			transition = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
 			transition.srcAccessMask = convert_usage_to_access(old_states[i]);
 			transition.dstAccessMask = convert_usage_to_access(new_states[i]);
@@ -92,7 +92,10 @@ void reshade::vulkan::command_list_impl::barrier(uint32_t count, const api::reso
 
 	assert(src_stage_mask != 0 && dst_stage_mask != 0);
 
-	vk.CmdPipelineBarrier(_orig, src_stage_mask, dst_stage_mask, 0, 0, nullptr, static_cast<uint32_t>(buffer_barriers.size()), buffer_barriers.data(), static_cast<uint32_t>(image_barriers.size()), image_barriers.data());
+	vk.CmdPipelineBarrier(_orig, src_stage_mask, dst_stage_mask, 0, 0, nullptr, num_buffer_barriers, buffer_barriers, num_image_barriers, image_barriers);
+
+	_freea(buffer_barriers);
+	_freea(image_barriers);
 }
 
 void reshade::vulkan::command_list_impl::begin_render_pass(api::render_pass pass, api::framebuffer fbo)
@@ -104,7 +107,7 @@ void reshade::vulkan::command_list_impl::begin_render_pass(api::render_pass pass
 	VkRenderPassBeginInfo begin_info { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
 	begin_info.renderPass = (VkRenderPass)pass.handle;
 	begin_info.framebuffer = (VkFramebuffer)fbo.handle;
-	begin_info.renderArea.extent = _device_impl->get_native_object_data<reshade::vulkan::framebuffer_data>((uint64_t)begin_info.framebuffer).area;
+	begin_info.renderArea.extent = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_FRAMEBUFFER>(begin_info.framebuffer)->area;
 
 	vk.CmdBeginRenderPass(_orig, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -146,20 +149,51 @@ void reshade::vulkan::command_list_impl::bind_pipeline_states(uint32_t count, co
 			blend_constant[3] = ((values[i] >> 12) & 0xFF) / 255.0f;
 
 			vk.CmdSetBlendConstants(_orig, blend_constant);
-			break;
+			continue;
 		}
 		case api::dynamic_state::stencil_read_mask:
 			vk.CmdSetStencilCompareMask(_orig, VK_STENCIL_FACE_FRONT_AND_BACK, values[i]);
-			break;
+			continue;
 		case api::dynamic_state::stencil_write_mask:
 			vk.CmdSetStencilWriteMask(_orig, VK_STENCIL_FACE_FRONT_AND_BACK, values[i]);
-			break;
+			continue;
 		case api::dynamic_state::stencil_reference_value:
 			vk.CmdSetStencilReference(_orig, VK_STENCIL_FACE_FRONT_AND_BACK, values[i]);
-			break;
+			continue;
+		}
+
+		if (!_device_impl->_extended_dynamic_state_ext)
+		{
+			assert(false);
+			continue;
+		}
+
+		switch (states[i])
+		{
+		case api::dynamic_state::cull_mode:
+			vk.CmdSetCullModeEXT(_orig, convert_cull_mode(static_cast<api::cull_mode>(values[i])));
+			continue;
+		case api::dynamic_state::front_counter_clockwise:
+			vk.CmdSetFrontFaceEXT(_orig, values[i] != 0 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE);
+			continue;
+		case api::dynamic_state::primitive_topology:
+			vk.CmdSetPrimitiveTopologyEXT(_orig, convert_primitive_topology(static_cast<api::primitive_topology>(values[i])));
+			continue;
+		case api::dynamic_state::depth_enable:
+			vk.CmdSetDepthTestEnableEXT(_orig, values[i]);
+			continue;
+		case api::dynamic_state::depth_write_mask:
+			vk.CmdSetDepthWriteEnableEXT(_orig, values[i]);
+			continue;
+		case api::dynamic_state::depth_func:
+			vk.CmdSetDepthCompareOpEXT(_orig, convert_compare_op(static_cast<api::compare_op>(values[i])));
+			continue;
+		case api::dynamic_state::stencil_enable:
+			vk.CmdSetStencilTestEnableEXT(_orig, values[i]);
+			continue;
 		default:
 			assert(false);
-			break;
+			continue;
 		}
 	}
 }
@@ -189,7 +223,7 @@ void reshade::vulkan::command_list_impl::bind_viewports(uint32_t first, uint32_t
 }
 void reshade::vulkan::command_list_impl::bind_scissor_rects(uint32_t first, uint32_t count, const int32_t *rects)
 {
-	std::vector<VkRect2D> rect_data(count);
+	const auto rect_data = static_cast<VkRect2D *>(_malloca(count * sizeof(VkRect2D)));
 	for (uint32_t i = 0, k = 0; i < count; ++i, k += 4)
 	{
 		rect_data[i].offset.x = rects[k + 0];
@@ -198,7 +232,9 @@ void reshade::vulkan::command_list_impl::bind_scissor_rects(uint32_t first, uint
 		rect_data[i].extent.height = rects[k + 3] - rects[k + 1];
 	}
 
-	vk.CmdSetScissor(_orig, first, count, rect_data.data());
+	vk.CmdSetScissor(_orig, first, count, rect_data);
+
+	_freea(rect_data);
 }
 
 void reshade::vulkan::command_list_impl::push_constants(api::shader_stage stages, api::pipeline_layout layout, uint32_t, uint32_t offset, uint32_t count, const void *values)
@@ -210,58 +246,66 @@ void reshade::vulkan::command_list_impl::push_constants(api::shader_stage stages
 		static_cast<VkShaderStageFlags>(stages),
 		offset * 4, count * 4, values);
 }
-void reshade::vulkan::command_list_impl::push_descriptors(api::shader_stage stages, api::pipeline_layout layout, uint32_t layout_param, api::descriptor_type type, uint32_t first, uint32_t count, const void *descriptors)
+void reshade::vulkan::command_list_impl::push_descriptors(api::shader_stage stages, api::pipeline_layout layout, uint32_t layout_param, const api::descriptor_set_update &update)
 {
-	assert(count != 0);
+	if (update.count == 0)
+		return;
+
+	assert(update.set.handle == 0);
 
 	VkWriteDescriptorSet write { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-	write.dstBinding = first;
-	write.descriptorCount = count;
-	write.descriptorType = static_cast<VkDescriptorType>(type);
+	write.dstBinding = update.binding;
+	write.dstArrayElement = update.array_offset;
+	write.descriptorCount = update.count;
+	write.descriptorType = convert_descriptor_type(update.type, true);
 
-	std::vector<VkDescriptorImageInfo> image_info(count);
+	const auto image_info = static_cast<VkDescriptorImageInfo *>(_malloca(update.count * sizeof(VkDescriptorImageInfo)));
 
-	switch (type)
+	switch (update.type)
 	{
 	case api::descriptor_type::sampler:
-		for (uint32_t i = 0; i < count; ++i)
+		write.pImageInfo = image_info;
+		for (uint32_t k = 0; k < update.count; ++k)
 		{
-			const auto &descriptor = static_cast<const api::sampler *>(descriptors)[i];
-			image_info[i].sampler = (VkSampler)descriptor.handle;
+			const auto &descriptor = static_cast<const api::sampler *>(update.descriptors)[k];
+			image_info[k].sampler = (VkSampler)descriptor.handle;
 		}
-		write.pImageInfo = image_info.data();
 		break;
 	case api::descriptor_type::sampler_with_resource_view:
-		for (uint32_t i = 0; i < count; ++i)
+		write.pImageInfo = image_info;
+		for (uint32_t k = 0; k < update.count; ++k)
 		{
-			const auto &descriptor = static_cast<const api::sampler_with_resource_view *>(descriptors)[i];
-			image_info[i].sampler = (VkSampler)descriptor.sampler.handle;
-			image_info[i].imageView = (VkImageView)descriptor.view.handle;
-			image_info[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			const auto &descriptor = static_cast<const api::sampler_with_resource_view *>(update.descriptors)[k];
+			image_info[k].sampler = (VkSampler)descriptor.sampler.handle;
+			image_info[k].imageView = (VkImageView)descriptor.view.handle;
+			image_info[k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		}
-		write.pImageInfo = image_info.data();
 		break;
 	case api::descriptor_type::shader_resource_view:
-		for (uint32_t i = 0; i < count; ++i)
-		{
-			const auto &descriptor = static_cast<const api::resource_view *>(descriptors)[i];
-			image_info[i].imageView = (VkImageView)descriptor.handle;
-			image_info[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		}
-		write.pImageInfo = image_info.data();
-		break;
 	case api::descriptor_type::unordered_access_view:
-		for (uint32_t i = 0; i < count; ++i)
+		if (const auto descriptors = static_cast<const api::resource_view *>(update.descriptors);
+			_device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)descriptors[0].handle)->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
 		{
-			const auto &descriptor = static_cast<const api::resource_view *>(descriptors)[i];
-			image_info[i].imageView = (VkImageView)descriptor.handle;
-			image_info[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+			write.pImageInfo = image_info;
+			for (uint32_t k = 0; k < update.count; ++k)
+			{
+				const auto &descriptor = descriptors[k];
+				image_info[k].imageView = (VkImageView)descriptor.handle;
+				image_info[k].imageLayout = (update.type == api::descriptor_type::unordered_access_view) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			}
 		}
-		write.pImageInfo = image_info.data();
+		else
+		{
+			write.descriptorType = convert_descriptor_type(update.type, false);
+
+			static_assert(sizeof(*descriptors) == sizeof(VkBufferView));
+			write.pTexelBufferView = reinterpret_cast<const VkBufferView *>(descriptors);
+		}
 		break;
 	case api::descriptor_type::constant_buffer:
 	case api::descriptor_type::shader_storage_buffer:
-		write.pBufferInfo = static_cast<const VkDescriptorBufferInfo *>(descriptors);
+		static_assert(sizeof(api::buffer_range) == sizeof(VkDescriptorBufferInfo));
+		write.pBufferInfo = static_cast<const VkDescriptorBufferInfo *>(update.descriptors);
 		break;
 	default:
 		assert(false);
@@ -277,9 +321,10 @@ void reshade::vulkan::command_list_impl::push_descriptors(api::shader_stage stag
 	}
 	else
 	{
-		assert(first == 0);
+		assert(update.binding == 0 && update.array_offset == 0);
 
-		VkDescriptorSetLayout set_layout = (VkDescriptorSetLayout)_device_impl->get_native_object_data<pipeline_layout_data>(layout.handle).desc[layout_param].descriptor_layout.handle;
+		const VkPipelineLayout pipeline_layout = (VkPipelineLayout)layout.handle;
+		const VkDescriptorSetLayout set_layout = (VkDescriptorSetLayout)_device_impl->get_user_data_for_object<VK_OBJECT_TYPE_PIPELINE_LAYOUT>(pipeline_layout)->desc[layout_param].descriptor_layout.handle;
 
 		VkDescriptorSetAllocateInfo alloc_info { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
 		alloc_info.descriptorPool = _device_impl->_transient_descriptor_pool[_device_impl->_transient_index % 4];
@@ -297,11 +342,12 @@ void reshade::vulkan::command_list_impl::push_descriptors(api::shader_stage stag
 			layout_param, 1, &write.dstSet,
 			0, nullptr);
 	}
+
+	_freea(image_info);
 }
-void reshade::vulkan::command_list_impl::bind_descriptor_sets(api::shader_stage stages, api::pipeline_layout layout, uint32_t first, uint32_t count, const api::descriptor_set *sets, const uint32_t *offsets)
+void reshade::vulkan::command_list_impl::bind_descriptor_sets(api::shader_stage stages, api::pipeline_layout layout, uint32_t first, uint32_t count, const api::descriptor_set *sets)
 {
 	assert(sets != nullptr);
-	assert(offsets == nullptr || offsets[0] == 0);
 
 	static_assert(sizeof(*sets) == sizeof(VkDescriptorSet));
 
@@ -330,21 +376,21 @@ void reshade::vulkan::command_list_impl::bind_vertex_buffers(uint32_t first, uin
 	vk.CmdBindVertexBuffers(_orig, first, count, reinterpret_cast<const VkBuffer *>(buffers), offsets);
 }
 
-void reshade::vulkan::command_list_impl::draw(uint32_t vertices, uint32_t instances, uint32_t first_vertex, uint32_t first_instance)
+void reshade::vulkan::command_list_impl::draw(uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance)
 {
 	_has_commands = true;
 
 	assert(_current_fbo != VK_NULL_HANDLE);
 
-	vk.CmdDraw(_orig, vertices, instances, first_vertex, first_instance);
+	vk.CmdDraw(_orig, vertex_count, instance_count, first_vertex, first_instance);
 }
-void reshade::vulkan::command_list_impl::draw_indexed(uint32_t indices, uint32_t instances, uint32_t first_index, int32_t vertex_offset, uint32_t first_instance)
+void reshade::vulkan::command_list_impl::draw_indexed(uint32_t index_count, uint32_t instance_count, uint32_t first_index, int32_t vertex_offset, uint32_t first_instance)
 {
 	_has_commands = true;
 
 	assert(_current_fbo != VK_NULL_HANDLE);
 
-	vk.CmdDrawIndexed(_orig, indices, instances, first_index, vertex_offset, first_instance);
+	vk.CmdDrawIndexed(_orig, index_count, instance_count, first_index, vertex_offset, first_instance);
 }
 void reshade::vulkan::command_list_impl::dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
 {
@@ -366,7 +412,7 @@ void reshade::vulkan::command_list_impl::draw_or_dispatch_indirect(api::indirect
 		break;
 	case api::indirect_command::dispatch:
 		for (uint32_t i = 0; i < draw_count; ++i)
-			vk.CmdDispatchIndirect(_orig, (VkBuffer)buffer.handle, offset + i * stride);
+			vk.CmdDispatchIndirect(_orig, (VkBuffer)buffer.handle, offset + static_cast<uint64_t>(i) * stride);
 		break;
 	}
 }
@@ -387,7 +433,7 @@ void reshade::vulkan::command_list_impl::copy_resource(api::resource src, api::r
 			{
 				const uint32_t subresource = level + layer * desc.texture.levels;
 
-				copy_texture_region(src, subresource, nullptr, dst, subresource, nullptr, api::filter_type::min_mag_mip_point);
+				copy_texture_region(src, subresource, nullptr, dst, subresource, nullptr, api::filter_mode::min_mag_mip_point);
 			}
 		}
 	}
@@ -397,7 +443,7 @@ void reshade::vulkan::command_list_impl::copy_buffer_region(api::resource src, u
 	_has_commands = true;
 
 	if (size == std::numeric_limits<uint64_t>::max())
-		size  = _device_impl->get_native_object_data<resource_data>(src.handle).buffer_create_info.size;
+		size  = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_BUFFER>((VkBuffer)src.handle)->create_info.size;
 
 	VkBufferCopy region;
 	region.srcOffset = src_offset;
@@ -410,15 +456,14 @@ void reshade::vulkan::command_list_impl::copy_buffer_to_texture(api::resource sr
 {
 	_has_commands = true;
 
-	const resource_data dst_data = _device_impl->get_native_object_data<resource_data>(dst.handle);
-	assert(dst_data.is_image());
+	const auto dst_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)dst.handle);
 
 	VkBufferImageCopy region;
 	region.bufferOffset = src_offset;
 	region.bufferRowLength = row_length;
 	region.bufferImageHeight = slice_height;
 
-	convert_subresource(dst_subresource, dst_data.image_create_info, region.imageSubresource);
+	convert_subresource(dst_subresource, dst_data->create_info, region.imageSubresource);
 	if (dst_box != nullptr)
 	{
 		std::copy_n(dst_box, 3, &region.imageOffset.x);
@@ -429,20 +474,19 @@ void reshade::vulkan::command_list_impl::copy_buffer_to_texture(api::resource sr
 	else
 	{
 		region.imageOffset = { 0, 0, 0 };
-		region.imageExtent.width  = std::max(1u, dst_data.image_create_info.extent.width  >> region.imageSubresource.mipLevel);
-		region.imageExtent.height = std::max(1u, dst_data.image_create_info.extent.height >> region.imageSubresource.mipLevel);
-		region.imageExtent.depth  = std::max(1u, dst_data.image_create_info.extent.depth  >> region.imageSubresource.mipLevel);
+		region.imageExtent.width  = std::max(1u, dst_data->create_info.extent.width  >> region.imageSubresource.mipLevel);
+		region.imageExtent.height = std::max(1u, dst_data->create_info.extent.height >> region.imageSubresource.mipLevel);
+		region.imageExtent.depth  = std::max(1u, dst_data->create_info.extent.depth  >> region.imageSubresource.mipLevel);
 	}
 
 	vk.CmdCopyBufferToImage(_orig, (VkBuffer)src.handle, (VkImage)dst.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
-void reshade::vulkan::command_list_impl::copy_texture_region(api::resource src, uint32_t src_subresource, const int32_t src_box[6], api::resource dst, uint32_t dst_subresource, const int32_t dst_box[6], api::filter_type filter)
+void reshade::vulkan::command_list_impl::copy_texture_region(api::resource src, uint32_t src_subresource, const int32_t src_box[6], api::resource dst, uint32_t dst_subresource, const int32_t dst_box[6], api::filter_mode filter)
 {
 	_has_commands = true;
 
-	const resource_data src_data = _device_impl->get_native_object_data<resource_data>(src.handle);
-	const resource_data dst_data = _device_impl->get_native_object_data<resource_data>(dst.handle);
-	assert(src_data.is_image() && dst_data.is_image());
+	const auto src_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)src.handle);
+	const auto dst_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)dst.handle);
 
 	if ((src_box == nullptr && dst_box == nullptr) || (src_box != nullptr && dst_box != nullptr &&
 		(src_box[3] - src_box[0]) == (dst_box[3] - dst_box[0]) &&
@@ -451,13 +495,13 @@ void reshade::vulkan::command_list_impl::copy_texture_region(api::resource src, 
 	{
 		VkImageCopy region;
 
-		convert_subresource(src_subresource, src_data.image_create_info, region.srcSubresource);
+		convert_subresource(src_subresource, src_data->create_info, region.srcSubresource);
 		if (src_box != nullptr)
 			std::copy_n(src_box, 3, &region.srcOffset.x);
 		else
 			region.srcOffset = { 0, 0, 0 };
 
-		convert_subresource(dst_subresource, dst_data.image_create_info, region.dstSubresource);
+		convert_subresource(dst_subresource, dst_data->create_info, region.dstSubresource);
 		if (dst_box != nullptr)
 			std::copy_n(dst_box, 3, &region.dstOffset.x);
 		else
@@ -471,9 +515,9 @@ void reshade::vulkan::command_list_impl::copy_texture_region(api::resource src, 
 		}
 		else
 		{
-			region.extent.width  = std::max(1u, src_data.image_create_info.extent.width  >> region.srcSubresource.mipLevel);
-			region.extent.height = std::max(1u, src_data.image_create_info.extent.height >> region.srcSubresource.mipLevel);
-			region.extent.depth  = std::max(1u, src_data.image_create_info.extent.depth  >> region.srcSubresource.mipLevel);
+			region.extent.width  = std::max(1u, src_data->create_info.extent.width  >> region.srcSubresource.mipLevel);
+			region.extent.height = std::max(1u, src_data->create_info.extent.height >> region.srcSubresource.mipLevel);
+			region.extent.depth  = std::max(1u, src_data->create_info.extent.depth  >> region.srcSubresource.mipLevel);
 		}
 
 		vk.CmdCopyImage(_orig,
@@ -485,7 +529,7 @@ void reshade::vulkan::command_list_impl::copy_texture_region(api::resource src, 
 	{
 		VkImageBlit region;
 
-		convert_subresource(src_subresource, src_data.image_create_info, region.srcSubresource);
+		convert_subresource(src_subresource, src_data->create_info, region.srcSubresource);
 		if (src_box != nullptr)
 		{
 			std::copy_n(src_box, 6, &region.srcOffsets[0].x);
@@ -494,12 +538,12 @@ void reshade::vulkan::command_list_impl::copy_texture_region(api::resource src, 
 		{
 			region.srcOffsets[0] = { 0, 0, 0 };
 			region.srcOffsets[1] = {
-				static_cast<int32_t>(std::max(1u, src_data.image_create_info.extent.width  >> region.srcSubresource.mipLevel)),
-				static_cast<int32_t>(std::max(1u, src_data.image_create_info.extent.height >> region.srcSubresource.mipLevel)),
-				static_cast<int32_t>(std::max(1u, src_data.image_create_info.extent.depth  >> region.srcSubresource.mipLevel)) };
+				static_cast<int32_t>(std::max(1u, src_data->create_info.extent.width  >> region.srcSubresource.mipLevel)),
+				static_cast<int32_t>(std::max(1u, src_data->create_info.extent.height >> region.srcSubresource.mipLevel)),
+				static_cast<int32_t>(std::max(1u, src_data->create_info.extent.depth  >> region.srcSubresource.mipLevel)) };
 		}
 
-		convert_subresource(dst_subresource, dst_data.image_create_info, region.dstSubresource);
+		convert_subresource(dst_subresource, dst_data->create_info, region.dstSubresource);
 		if (dst_box != nullptr)
 		{
 			std::copy_n(dst_box, 6, &region.dstOffsets[0].x);
@@ -508,31 +552,30 @@ void reshade::vulkan::command_list_impl::copy_texture_region(api::resource src, 
 		{
 			region.dstOffsets[0] = { 0, 0, 0 };
 			region.dstOffsets[1] = {
-				static_cast<int32_t>(std::max(1u, dst_data.image_create_info.extent.width  >> region.dstSubresource.mipLevel)),
-				static_cast<int32_t>(std::max(1u, dst_data.image_create_info.extent.height >> region.dstSubresource.mipLevel)),
-				static_cast<int32_t>(std::max(1u, dst_data.image_create_info.extent.depth  >> region.dstSubresource.mipLevel)) };
+				static_cast<int32_t>(std::max(1u, dst_data->create_info.extent.width  >> region.dstSubresource.mipLevel)),
+				static_cast<int32_t>(std::max(1u, dst_data->create_info.extent.height >> region.dstSubresource.mipLevel)),
+				static_cast<int32_t>(std::max(1u, dst_data->create_info.extent.depth  >> region.dstSubresource.mipLevel)) };
 		}
 
 		vk.CmdBlitImage(_orig,
 			(VkImage)src.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			(VkImage)dst.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			1, &region,
-			filter == api::filter_type::min_mag_mip_linear || filter == api::filter_type::min_mag_linear_mip_point ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+			filter == api::filter_mode::min_mag_mip_linear || filter == api::filter_mode::min_mag_linear_mip_point ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
 	}
 }
 void reshade::vulkan::command_list_impl::copy_texture_to_buffer(api::resource src, uint32_t src_subresource, const int32_t src_box[6], api::resource dst, uint64_t dst_offset, uint32_t row_length, uint32_t slice_height)
 {
 	_has_commands = true;
 
-	const resource_data src_data = _device_impl->get_native_object_data<resource_data>(src.handle);
-	assert(src_data.is_image());
+	const auto src_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)src.handle);
 
 	VkBufferImageCopy region;
 	region.bufferOffset = dst_offset;
 	region.bufferRowLength = row_length;
 	region.bufferImageHeight = slice_height;
 
-	convert_subresource(src_subresource, src_data.image_create_info, region.imageSubresource);
+	convert_subresource(src_subresource, src_data->create_info, region.imageSubresource);
 	if (src_box != nullptr)
 	{
 		std::copy_n(src_box, 3, &region.imageOffset.x);
@@ -543,9 +586,9 @@ void reshade::vulkan::command_list_impl::copy_texture_to_buffer(api::resource sr
 	else
 	{
 		region.imageOffset = { 0, 0, 0 };
-		region.imageExtent.width  = std::max(1u, src_data.image_create_info.extent.width  >> region.imageSubresource.mipLevel);
-		region.imageExtent.height = std::max(1u, src_data.image_create_info.extent.height >> region.imageSubresource.mipLevel);
-		region.imageExtent.depth  = std::max(1u, src_data.image_create_info.extent.depth  >> region.imageSubresource.mipLevel);
+		region.imageExtent.width  = std::max(1u, src_data->create_info.extent.width  >> region.imageSubresource.mipLevel);
+		region.imageExtent.height = std::max(1u, src_data->create_info.extent.height >> region.imageSubresource.mipLevel);
+		region.imageExtent.depth  = std::max(1u, src_data->create_info.extent.depth  >> region.imageSubresource.mipLevel);
 	}
 
 	vk.CmdCopyImageToBuffer(_orig, (VkImage)src.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, (VkBuffer)dst.handle, 1, &region);
@@ -554,19 +597,18 @@ void reshade::vulkan::command_list_impl::resolve_texture_region(api::resource sr
 {
 	_has_commands = true;
 
-	const resource_data src_data = _device_impl->get_native_object_data<resource_data>(src.handle);
-	const resource_data dst_data = _device_impl->get_native_object_data<resource_data>(dst.handle);
-	assert(src_data.is_image() && dst_data.is_image());
+	const auto src_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)src.handle);
+	const auto dst_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)dst.handle);
 
 	VkImageResolve region;
 
-	convert_subresource(src_subresource, src_data.image_create_info, region.srcSubresource);
+	convert_subresource(src_subresource, src_data->create_info, region.srcSubresource);
 	if (src_box != nullptr)
 		std::copy_n(src_box, 3, &region.srcOffset.x);
 	else
 		region.srcOffset = { 0, 0, 0 };
 
-	convert_subresource(dst_subresource, dst_data.image_create_info, region.dstSubresource);
+	convert_subresource(dst_subresource, dst_data->create_info, region.dstSubresource);
 	if (dst_offset != nullptr)
 		std::copy_n(dst_offset, 3, &region.dstOffset.x);
 	else
@@ -580,9 +622,9 @@ void reshade::vulkan::command_list_impl::resolve_texture_region(api::resource sr
 	}
 	else
 	{
-		region.extent.width  = std::max(1u, src_data.image_create_info.extent.width  >> region.srcSubresource.mipLevel);
-		region.extent.height = std::max(1u, src_data.image_create_info.extent.height >> region.srcSubresource.mipLevel);
-		region.extent.depth  = std::max(1u, src_data.image_create_info.extent.depth  >> region.srcSubresource.mipLevel);
+		region.extent.width  = std::max(1u, src_data->create_info.extent.width  >> region.srcSubresource.mipLevel);
+		region.extent.height = std::max(1u, src_data->create_info.extent.height >> region.srcSubresource.mipLevel);
+		region.extent.depth  = std::max(1u, src_data->create_info.extent.depth  >> region.srcSubresource.mipLevel);
 	}
 
 	vk.CmdResolveImage(_orig,
@@ -591,13 +633,11 @@ void reshade::vulkan::command_list_impl::resolve_texture_region(api::resource sr
 		1, &region);
 }
 
-void reshade::vulkan::command_list_impl::clear_attachments(api::attachment_type clear_flags, const float color[4], float depth, uint8_t stencil, uint32_t num_rects, const int32_t *rects)
+void reshade::vulkan::command_list_impl::clear_attachments(api::attachment_type clear_flags, const float color[4], float depth, uint8_t stencil, uint32_t rect_count, const int32_t *rects)
 {
 	_has_commands = true;
 
-	assert(_current_fbo != VK_NULL_HANDLE);
-
-	const framebuffer_data fbo_data = _device_impl->get_native_object_data<framebuffer_data>((uint64_t)_current_fbo);
+	const auto fbo_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_FRAMEBUFFER>(_current_fbo);
 
 	uint32_t num_clear_attachments = 0;
 	VkClearAttachment clear_attachments[9];
@@ -606,7 +646,7 @@ void reshade::vulkan::command_list_impl::clear_attachments(api::attachment_type 
 	if (aspect_mask & (VK_IMAGE_ASPECT_COLOR_BIT))
 	{
 		uint32_t index = 0;
-		for (VkImageAspectFlags format_flags : fbo_data.attachment_types)
+		for (VkImageAspectFlags format_flags : fbo_data->attachment_types)
 		{
 			if (format_flags != VK_IMAGE_ASPECT_COLOR_BIT)
 				continue;
@@ -628,11 +668,11 @@ void reshade::vulkan::command_list_impl::clear_attachments(api::attachment_type 
 
 	assert(num_clear_attachments != 0);
 
-	if (num_rects == 0)
+	if (rect_count == 0)
 	{
 		VkClearRect clear_rect;
 		clear_rect.rect.offset = { 0, 0 };
-		clear_rect.rect.extent = fbo_data.area;
+		clear_rect.rect.extent = fbo_data->area;
 		clear_rect.baseArrayLayer = 0;
 		clear_rect.layerCount = 1;
 
@@ -640,8 +680,8 @@ void reshade::vulkan::command_list_impl::clear_attachments(api::attachment_type 
 	}
 	else
 	{
-		std::vector<VkClearRect> clear_rects(num_rects);
-		for (uint32_t i = 0, k = 0; i < num_rects; ++i, k += 4)
+		const auto clear_rects = static_cast<VkClearRect *>(_malloca(rect_count * sizeof(VkClearRect)));
+		for (uint32_t i = 0, k = 0; i < rect_count; ++i, k += 4)
 		{
 			clear_rects[i].rect.offset.x = rects[k + 0];
 			clear_rects[i].rect.offset.y = rects[k + 1];
@@ -651,16 +691,18 @@ void reshade::vulkan::command_list_impl::clear_attachments(api::attachment_type 
 			clear_rects[i].layerCount = 1;
 		}
 
-		vk.CmdClearAttachments(_orig, num_clear_attachments, clear_attachments, num_rects, clear_rects.data());
+		vk.CmdClearAttachments(_orig, num_clear_attachments, clear_attachments, rect_count, clear_rects);
+
+		_freea(clear_rects);
 	}
 }
-void reshade::vulkan::command_list_impl::clear_depth_stencil_view(api::resource_view dsv, api::attachment_type clear_flags, float depth, uint8_t stencil, uint32_t num_rects, const int32_t *)
+void reshade::vulkan::command_list_impl::clear_depth_stencil_view(api::resource_view dsv, api::attachment_type clear_flags, float depth, uint8_t stencil, uint32_t rect_count, const int32_t *)
 {
 	_has_commands = true;
 
-	assert(num_rects == 0);
-	const resource_view_data dsv_data = _device_impl->get_native_object_data<resource_view_data>(dsv.handle);
-	assert(dsv_data.is_image_view()); // Has to be an image
+	assert(rect_count == 0);
+
+	const auto dsv_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)dsv.handle);
 
 	// Transition state to VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL (since it will be in 'resource_usage::depth_stencil_write' at this point)
 	VkImageMemoryBarrier transition { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -668,23 +710,24 @@ void reshade::vulkan::command_list_impl::clear_depth_stencil_view(api::resource_
 	transition.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	transition.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	transition.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	transition.image = dsv_data.image_create_info.image;
-	transition.subresourceRange = { static_cast<VkImageAspectFlags>(clear_flags), 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+	transition.image = dsv_data->create_info.image;
+	transition.subresourceRange = dsv_data->create_info.subresourceRange;
+	transition.subresourceRange.aspectMask &= static_cast<VkImageAspectFlags>(clear_flags);
 	vk.CmdPipelineBarrier(_orig, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &transition);
 
 	const VkClearDepthStencilValue clear_value = { depth, stencil };
-	vk.CmdClearDepthStencilImage(_orig, dsv_data.image_create_info.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_value, 1, &transition.subresourceRange);
+	vk.CmdClearDepthStencilImage(_orig, dsv_data->create_info.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_value, 1, &transition.subresourceRange);
 
 	std::swap(transition.oldLayout, transition.newLayout);
 	vk.CmdPipelineBarrier(_orig, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &transition);
 }
-void reshade::vulkan::command_list_impl::clear_render_target_view(api::resource_view rtv, const float color[4], uint32_t num_rects, const int32_t *)
+void reshade::vulkan::command_list_impl::clear_render_target_view(api::resource_view rtv, const float color[4], uint32_t rect_count, const int32_t *)
 {
 	_has_commands = true;
 
-	assert(num_rects == 0);
-	const resource_view_data rtv_data = _device_impl->get_native_object_data<resource_view_data>(rtv.handle);
-	assert(rtv_data.is_image_view()); // Has to be an image
+	assert(rect_count == 0);
+
+	const auto rtv_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)rtv.handle);
 
 	// Transition state to VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL (since it will be in 'resource_usage::render_target' at this point)
 	VkImageMemoryBarrier transition { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -692,55 +735,49 @@ void reshade::vulkan::command_list_impl::clear_render_target_view(api::resource_
 	transition.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	transition.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	transition.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	transition.image = rtv_data.image_create_info.image;
-	transition.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+	transition.image = rtv_data->create_info.image;
+	transition.subresourceRange = rtv_data->create_info.subresourceRange;
 	vk.CmdPipelineBarrier(_orig, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &transition);
 
 	VkClearColorValue clear_value;
 	std::memcpy(clear_value.float32, color, 4 * sizeof(float));
 
-	vk.CmdClearColorImage(_orig, rtv_data.image_create_info.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_value, 1, &transition.subresourceRange);
+	vk.CmdClearColorImage(_orig, rtv_data->create_info.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_value, 1, &transition.subresourceRange);
 
 	std::swap(transition.oldLayout, transition.newLayout);
 	vk.CmdPipelineBarrier(_orig, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &transition);
 }
-void reshade::vulkan::command_list_impl::clear_unordered_access_view_uint(api::resource_view uav, const uint32_t values[4], uint32_t num_rects, const int32_t *)
+void reshade::vulkan::command_list_impl::clear_unordered_access_view_uint(api::resource_view uav, const uint32_t values[4], uint32_t rect_count, const int32_t *)
 {
 	_has_commands = true;
 
-	assert(num_rects == 0);
-	const resource_view_data uav_data = _device_impl->get_native_object_data<resource_view_data>(uav.handle);
-	assert(uav_data.is_image_view()); // Has to be an image
+	assert(rect_count == 0);
 
-	const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+	const auto uav_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)uav.handle);
 
 	VkClearColorValue clear_value;
 	std::memcpy(clear_value.uint32, values, 4 * sizeof(uint32_t));
 
-	vk.CmdClearColorImage(_orig, uav_data.image_create_info.image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &range);
+	vk.CmdClearColorImage(_orig, uav_data->create_info.image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &uav_data->create_info.subresourceRange);
 }
-void reshade::vulkan::command_list_impl::clear_unordered_access_view_float(api::resource_view uav, const float values[4], uint32_t num_rects, const int32_t *)
+void reshade::vulkan::command_list_impl::clear_unordered_access_view_float(api::resource_view uav, const float values[4], uint32_t rect_count, const int32_t *)
 {
 	_has_commands = true;
 
-	assert(num_rects == 0);
-	const resource_view_data uav_data = _device_impl->get_native_object_data<resource_view_data>(uav.handle);
-	assert(uav_data.is_image_view()); // Has to be an image
+	assert(rect_count == 0);
 
-	const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS };
+	const auto uav_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)uav.handle);
 
 	VkClearColorValue clear_value;
 	std::memcpy(clear_value.float32, values, 4 * sizeof(float));
 
-	vk.CmdClearColorImage(_orig, uav_data.image_create_info.image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &range);
+	vk.CmdClearColorImage(_orig, uav_data->create_info.image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &uav_data->create_info.subresourceRange);
 }
 
 void reshade::vulkan::command_list_impl::generate_mipmaps(api::resource_view srv)
 {
-	assert(srv.handle != 0);
-	const resource_view_data view_data = _device_impl->get_native_object_data<resource_view_data>(srv.handle);
-	assert(view_data.is_image_view());
-	const resource_data res_data = _device_impl->get_native_object_data<resource_data>((uint64_t)view_data.image_create_info.image);
+	const auto view_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)srv.handle);
+	const auto image_data = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>(view_data->create_info.image);
 
 	VkImageMemoryBarrier barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
 	barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -749,14 +786,14 @@ void reshade::vulkan::command_list_impl::generate_mipmaps(api::resource_view srv
 	barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.image = view_data.image_create_info.image;
-	barrier.subresourceRange = view_data.image_create_info.subresourceRange;
+	barrier.image = view_data->create_info.image;
+	barrier.subresourceRange = view_data->create_info.subresourceRange;
 	vk.CmdPipelineBarrier(_orig, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-	int32_t width = res_data.image_create_info.extent.width >> view_data.image_create_info.subresourceRange.baseMipLevel;
-	int32_t height = res_data.image_create_info.extent.height >> view_data.image_create_info.subresourceRange.baseMipLevel;
+	int32_t width = image_data->create_info.extent.width >> view_data->create_info.subresourceRange.baseMipLevel;
+	int32_t height = image_data->create_info.extent.height >> view_data->create_info.subresourceRange.baseMipLevel;
 
-	for (uint32_t level = view_data.image_create_info.subresourceRange.baseMipLevel + 1; level < res_data.image_create_info.mipLevels; ++level, width /= 2, height /= 2)
+	for (uint32_t level = view_data->create_info.subresourceRange.baseMipLevel + 1; level < image_data->create_info.mipLevels; ++level, width /= 2, height /= 2)
 	{
 		barrier.subresourceRange.baseMipLevel = level;
 		barrier.subresourceRange.levelCount = 1;
@@ -773,8 +810,8 @@ void reshade::vulkan::command_list_impl::generate_mipmaps(api::resource_view srv
 		blit.srcSubresource = { barrier.subresourceRange.aspectMask, level - 1, barrier.subresourceRange.baseArrayLayer, barrier.subresourceRange.layerCount };
 		blit.dstOffsets[0] = { 0, 0, 0 };
 		blit.dstOffsets[1] = { width > 1 ? width / 2 : 1, height > 1 ? height / 2 : 1, 1 };
-		blit.dstSubresource = { barrier.subresourceRange.aspectMask, level, barrier.subresourceRange.baseArrayLayer, barrier.subresourceRange.layerCount };
-		vk.CmdBlitImage(_orig, view_data.image_create_info.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, view_data.image_create_info.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+		blit.dstSubresource = { barrier.subresourceRange.aspectMask, level    , barrier.subresourceRange.baseArrayLayer, barrier.subresourceRange.layerCount };
+		vk.CmdBlitImage(_orig, view_data->create_info.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, view_data->create_info.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
 
 		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 		barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -787,7 +824,7 @@ void reshade::vulkan::command_list_impl::generate_mipmaps(api::resource_view srv
 	barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 	barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-	barrier.subresourceRange = view_data.image_create_info.subresourceRange;
+	barrier.subresourceRange = view_data->create_info.subresourceRange;
 	vk.CmdPipelineBarrier(_orig, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 

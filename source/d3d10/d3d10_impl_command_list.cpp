@@ -3,10 +3,9 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "dll_log.hpp"
 #include "d3d10_impl_device.hpp"
 #include "d3d10_impl_type_convert.hpp"
-#include <algorithm>
+#include "dll_log.hpp"
 
 void reshade::d3d10::pipeline_impl::apply(ID3D10Device *ctx) const
 {
@@ -223,6 +222,9 @@ void reshade::d3d10::device_impl::push_constants(api::shader_stage stages, api::
 {
 	assert(first == 0);
 
+	if (count == 0)
+		return;
+
 	if (count > _push_constants_size)
 	{
 		// Enlarge push constant buffer to fit new requirement
@@ -263,44 +265,43 @@ void reshade::d3d10::device_impl::push_constants(api::shader_stage stages, api::
 	if ((stages & api::shader_stage::pixel) == api::shader_stage::pixel)
 		_orig->PSSetConstantBuffers(push_constants_slot, 1, &push_constants);
 }
-void reshade::d3d10::device_impl::push_descriptors(api::shader_stage stages, api::pipeline_layout layout, uint32_t layout_param, api::descriptor_type type, uint32_t first, uint32_t count, const void *descriptors)
+void reshade::d3d10::device_impl::push_descriptors(api::shader_stage stages, api::pipeline_layout layout, uint32_t layout_param, const api::descriptor_set_update &update)
 {
+	assert(update.set.handle == 0);
+
+	uint32_t first = update.offset;
 	if (layout.handle != 0)
 		first += reinterpret_cast<pipeline_layout_impl *>(layout.handle)->shader_registers[layout_param];
 
-	switch (type)
+	switch (update.type)
 	{
 	case api::descriptor_type::sampler:
-		bind_samplers(stages, first, count, static_cast<const api::sampler *>(descriptors));
+		bind_samplers(stages, first, update.count, static_cast<const api::sampler *>(update.descriptors));
 		break;
 	case api::descriptor_type::shader_resource_view:
-		bind_shader_resource_views(stages, first, count, static_cast<const api::resource_view *>(descriptors));
+		bind_shader_resource_views(stages, first, update.count, static_cast<const api::resource_view *>(update.descriptors));
 		break;
 	case api::descriptor_type::constant_buffer:
-		bind_constant_buffers(stages, first, count, static_cast<const api::buffer_range *>(descriptors));
+		bind_constant_buffers(stages, first, update.count, static_cast<const api::buffer_range *>(update.descriptors));
 		break;
 	default:
 		assert(false);
 		break;
 	}
 }
-void reshade::d3d10::device_impl::bind_descriptor_sets(api::shader_stage stages, api::pipeline_layout layout, uint32_t first, uint32_t count, const api::descriptor_set *sets, const uint32_t *offsets)
+void reshade::d3d10::device_impl::bind_descriptor_sets(api::shader_stage stages, api::pipeline_layout layout, uint32_t first, uint32_t count, const api::descriptor_set *sets)
 {
 	assert(sets != nullptr);
 
 	for (uint32_t i = 0; i < count; ++i)
 	{
 		const auto set_impl = reinterpret_cast<const descriptor_set_impl *>(sets[i].handle);
-		const auto set_offset = (offsets != nullptr) ? offsets[i] : 0;
 
 		push_descriptors(
 			stages,
 			layout,
 			first + i,
-			set_impl->type,
-			0,
-			set_impl->count - set_offset,
-			set_impl->descriptors.data() + set_offset * (set_impl->descriptors.size() / set_impl->count));
+			api::descriptor_set_update(0, set_impl->count, set_impl->type, set_impl->descriptors.data()));
 	}
 }
 
@@ -334,13 +335,13 @@ void reshade::d3d10::device_impl::bind_vertex_buffers(uint32_t first, uint32_t c
 	_orig->IASetVertexBuffers(first, count, buffer_ptrs, strides, offsets_32);
 }
 
-void reshade::d3d10::device_impl::draw(uint32_t vertices, uint32_t instances, uint32_t first_vertex, uint32_t first_instance)
+void reshade::d3d10::device_impl::draw(uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance)
 {
-	_orig->DrawInstanced(vertices, instances, first_vertex, first_instance);
+	_orig->DrawInstanced(vertex_count, instance_count, first_vertex, first_instance);
 }
-void reshade::d3d10::device_impl::draw_indexed(uint32_t indices, uint32_t instances, uint32_t first_index, int32_t vertex_offset, uint32_t first_instance)
+void reshade::d3d10::device_impl::draw_indexed(uint32_t index_count, uint32_t instance_count, uint32_t first_index, int32_t vertex_offset, uint32_t first_instance)
 {
-	_orig->DrawIndexedInstanced(indices, instances, first_index, vertex_offset, first_instance);
+	_orig->DrawIndexedInstanced(index_count, instance_count, first_index, vertex_offset, first_instance);
 }
 void reshade::d3d10::device_impl::dispatch(uint32_t, uint32_t, uint32_t)
 {
@@ -380,7 +381,7 @@ void reshade::d3d10::device_impl::copy_buffer_to_texture(api::resource, uint64_t
 {
 	assert(false);
 }
-void reshade::d3d10::device_impl::copy_texture_region(api::resource src, uint32_t src_subresource, const int32_t src_box[6], api::resource dst, uint32_t dst_subresource, const int32_t dst_box[6], api::filter_type)
+void reshade::d3d10::device_impl::copy_texture_region(api::resource src, uint32_t src_subresource, const int32_t src_box[6], api::resource dst, uint32_t dst_subresource, const int32_t dst_box[6], api::filter_mode)
 {
 	assert(src.handle != 0 && dst.handle != 0);
 	assert((src_box == nullptr && dst_box == nullptr) || (src_box != nullptr && dst_box != nullptr &&
@@ -406,9 +407,9 @@ void reshade::d3d10::device_impl::resolve_texture_region(api::resource src, uint
 		reinterpret_cast<ID3D10Resource *>(src.handle), src_subresource, convert_format(format));
 }
 
-void reshade::d3d10::device_impl::clear_attachments(api::attachment_type clear_flags, const float color[4], float depth, uint8_t stencil, uint32_t num_rects, const int32_t *)
+void reshade::d3d10::device_impl::clear_attachments(api::attachment_type clear_flags, const float color[4], float depth, uint8_t stencil, uint32_t rect_count, const int32_t *)
 {
-	assert(num_rects == 0);
+	assert(rect_count == 0);
 
 	com_ptr<ID3D10DepthStencilView> dsv;
 	com_ptr<ID3D10RenderTargetView> rtv[D3D10_SIMULTANEOUS_RENDER_TARGET_COUNT];
@@ -420,15 +421,15 @@ void reshade::d3d10::device_impl::clear_attachments(api::attachment_type clear_f
 	if (static_cast<UINT>(clear_flags & (api::attachment_type::depth | api::attachment_type::stencil)) != 0 && dsv != nullptr)
 		_orig->ClearDepthStencilView(dsv.get(), static_cast<UINT>(clear_flags) >> 1, depth, stencil);
 }
-void reshade::d3d10::device_impl::clear_depth_stencil_view(api::resource_view dsv, api::attachment_type clear_flags, float depth, uint8_t stencil, uint32_t num_rects, const int32_t *)
+void reshade::d3d10::device_impl::clear_depth_stencil_view(api::resource_view dsv, api::attachment_type clear_flags, float depth, uint8_t stencil, uint32_t rect_count, const int32_t *)
 {
-	assert(dsv.handle != 0 && num_rects == 0);
+	assert(dsv.handle != 0 && rect_count == 0);
 
 	_orig->ClearDepthStencilView(reinterpret_cast<ID3D10DepthStencilView *>(dsv.handle), static_cast<UINT>(clear_flags) >> 1, depth, stencil);
 }
-void reshade::d3d10::device_impl::clear_render_target_view(api::resource_view rtv, const float color[4], uint32_t num_rects, const int32_t *)
+void reshade::d3d10::device_impl::clear_render_target_view(api::resource_view rtv, const float color[4], uint32_t rect_count, const int32_t *)
 {
-	assert(rtv.handle != 0 && num_rects == 0);
+	assert(rtv.handle != 0 && rect_count == 0);
 
 	_orig->ClearRenderTargetView(reinterpret_cast<ID3D10RenderTargetView *>(rtv.handle), color);
 }

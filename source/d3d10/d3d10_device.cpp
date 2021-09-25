@@ -3,11 +3,11 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "dll_log.hpp"
-#include "com_utils.hpp"
 #include "d3d10_device.hpp"
 #include "dxgi/dxgi_device.hpp"
 #include "d3d10_impl_type_convert.hpp"
+#include "dll_log.hpp" // Include late to get HRESULT log overloads
+#include "com_utils.hpp"
 
 D3D10Device::D3D10Device(IDXGIDevice1 *dxgi_device, ID3D10Device1 *original) :
 	device_impl(original),
@@ -70,7 +70,8 @@ void D3D10Device::invoke_bind_samplers_event(reshade::api::shader_stage stage, U
 	const auto descriptors = reinterpret_cast<const reshade::api::sampler *>(objects);
 #endif
 
-	reshade::invoke_addon_event<reshade::addon_event::push_descriptors>(this, stage, _global_pipeline_layout, 0, reshade::api::descriptor_type::sampler, first, count, descriptors);
+	reshade::invoke_addon_event<reshade::addon_event::push_descriptors>(this, stage, _global_pipeline_layout, 0,
+		reshade::api::descriptor_set_update(first, count, reshade::api::descriptor_type::sampler, descriptors));
 }
 void D3D10Device::invoke_bind_shader_resource_views_event(reshade::api::shader_stage stage, UINT first, UINT count, ID3D10ShaderResourceView *const *objects)
 {
@@ -88,7 +89,8 @@ void D3D10Device::invoke_bind_shader_resource_views_event(reshade::api::shader_s
 	const auto descriptors = reinterpret_cast<const reshade::api::resource_view *>(objects);
 #endif
 
-	reshade::invoke_addon_event<reshade::addon_event::push_descriptors>(this, stage, _global_pipeline_layout, 1, reshade::api::descriptor_type::shader_resource_view, first, count, descriptors);
+	reshade::invoke_addon_event<reshade::addon_event::push_descriptors>(this, stage, _global_pipeline_layout, 1,
+		reshade::api::descriptor_set_update(first, count, reshade::api::descriptor_type::shader_resource_view, descriptors));
 }
 void D3D10Device::invoke_bind_constant_buffers_event(reshade::api::shader_stage stage, UINT first, UINT count, ID3D10Buffer *const *objects)
 {
@@ -106,7 +108,8 @@ void D3D10Device::invoke_bind_constant_buffers_event(reshade::api::shader_stage 
 			std::numeric_limits<uint64_t>::max() };
 	}
 
-	reshade::invoke_addon_event<reshade::addon_event::push_descriptors>(this, stage, _global_pipeline_layout, 2, reshade::api::descriptor_type::constant_buffer, first, count, descriptors);
+	reshade::invoke_addon_event<reshade::addon_event::push_descriptors>(this, stage, _global_pipeline_layout, 2,
+		reshade::api::descriptor_set_update(first, count, reshade::api::descriptor_type::constant_buffer, descriptors));
 }
 #endif
 
@@ -441,6 +444,7 @@ void    STDMETHODCALLTYPE D3D10Device::CopySubresourceRegion(ID3D10Resource *pDs
 	{
 		D3D10_RESOURCE_DIMENSION type = D3D10_RESOURCE_DIMENSION_UNKNOWN;
 		pDstResource->GetType(&type);
+
 		if (type == D3D10_RESOURCE_DIMENSION_BUFFER)
 		{
 			assert(SrcSubresource == 0 && DstSubresource == 0);
@@ -469,7 +473,7 @@ void    STDMETHODCALLTYPE D3D10Device::CopySubresourceRegion(ID3D10Resource *pDs
 
 			if (reshade::invoke_addon_event<reshade::addon_event::copy_texture_region>(this,
 				reshade::api::resource { reinterpret_cast<uintptr_t>(pSrcResource) }, SrcSubresource, reinterpret_cast<const int32_t *>(pSrcBox),
-				reshade::api::resource { reinterpret_cast<uintptr_t>(pDstResource) }, DstSubresource, DstX != 0 || DstY != 0 || DstZ != 0 ? dst_box : nullptr, reshade::api::filter_type::min_mag_mip_point))
+				reshade::api::resource { reinterpret_cast<uintptr_t>(pDstResource) }, DstSubresource, DstX != 0 || DstY != 0 || DstZ != 0 ? dst_box : nullptr, reshade::api::filter_mode::min_mag_mip_point))
 				return;
 		}
 	}
@@ -490,16 +494,17 @@ void    STDMETHODCALLTYPE D3D10Device::UpdateSubresource(ID3D10Resource *pDstRes
 #if RESHADE_ADDON
 	assert(pDstResource != nullptr);
 
-	if (reshade::has_addon_event<reshade::addon_event::upload_buffer_region>() ||
-		reshade::has_addon_event<reshade::addon_event::upload_texture_region>())
+	if (reshade::has_addon_event<reshade::addon_event::update_buffer_region>() ||
+		reshade::has_addon_event<reshade::addon_event::update_texture_region>())
 	{
 		D3D10_RESOURCE_DIMENSION type = D3D10_RESOURCE_DIMENSION_UNKNOWN;
 		pDstResource->GetType(&type);
+
 		if (type == D3D10_RESOURCE_DIMENSION_BUFFER)
 		{
 			assert(DstSubresource == 0);
 
-			if (reshade::invoke_addon_event<reshade::addon_event::upload_buffer_region>(this,
+			if (reshade::invoke_addon_event<reshade::addon_event::update_buffer_region>(this,
 				pSrcData,
 				reshade::api::resource { reinterpret_cast<uintptr_t>(pDstResource) },
 				pDstBox != nullptr ? pDstBox->left : 0,
@@ -510,7 +515,7 @@ void    STDMETHODCALLTYPE D3D10Device::UpdateSubresource(ID3D10Resource *pDstRes
 		{
 			static_assert(sizeof(D3D10_BOX) == (sizeof(int32_t) * 6));
 
-			if (reshade::invoke_addon_event<reshade::addon_event::upload_texture_region>(this,
+			if (reshade::invoke_addon_event<reshade::addon_event::update_texture_region>(this,
 				reshade::api::subresource_data { const_cast<void *>(pSrcData), SrcRowPitch, SrcDepthPitch },
 				reshade::api::resource { reinterpret_cast<uintptr_t>(pDstResource) }, DstSubresource, reinterpret_cast<const int32_t *>(pDstBox)))
 				return;
@@ -1049,11 +1054,9 @@ HRESULT STDMETHODCALLTYPE D3D10Device::CreateVertexShader(const void *pShaderByt
 	reshade::api::pipeline_desc desc = { reshade::api::pipeline_stage::vertex_shader };
 	desc.graphics.vertex_shader.code = pShaderBytecode;
 	desc.graphics.vertex_shader.code_size = BytecodeLength;
-	desc.graphics.vertex_shader.format = reshade::api::shader_format::dxbc;
 
 	if (reshade::invoke_addon_event<reshade::addon_event::create_pipeline>(this, desc))
 	{
-		assert(desc.graphics.vertex_shader.format == reshade::api::shader_format::dxbc);
 		pShaderBytecode = desc.graphics.vertex_shader.code;
 		BytecodeLength  = desc.graphics.vertex_shader.code_size;
 	}
@@ -1088,11 +1091,9 @@ HRESULT STDMETHODCALLTYPE D3D10Device::CreateGeometryShader(const void *pShaderB
 	reshade::api::pipeline_desc desc = { reshade::api::pipeline_stage::geometry_shader };
 	desc.graphics.geometry_shader.code = pShaderBytecode;
 	desc.graphics.geometry_shader.code_size = BytecodeLength;
-	desc.graphics.geometry_shader.format = reshade::api::shader_format::dxbc;
 
 	if (reshade::invoke_addon_event<reshade::addon_event::create_pipeline>(this, desc))
 	{
-		assert(desc.graphics.geometry_shader.format == reshade::api::shader_format::dxbc);
 		pShaderBytecode = desc.graphics.geometry_shader.code;
 		BytecodeLength  = desc.graphics.geometry_shader.code_size;
 	}
@@ -1127,11 +1128,9 @@ HRESULT STDMETHODCALLTYPE D3D10Device::CreateGeometryShaderWithStreamOutput(cons
 	reshade::api::pipeline_desc desc = { reshade::api::pipeline_stage::geometry_shader };
 	desc.graphics.geometry_shader.code = pShaderBytecode;
 	desc.graphics.geometry_shader.code_size = BytecodeLength;
-	desc.graphics.geometry_shader.format = reshade::api::shader_format::dxbc;
 
 	if (reshade::invoke_addon_event<reshade::addon_event::create_pipeline>(this, desc))
 	{
-		assert(desc.graphics.geometry_shader.format == reshade::api::shader_format::dxbc);
 		pShaderBytecode = desc.graphics.geometry_shader.code;
 		BytecodeLength  = desc.graphics.geometry_shader.code_size;
 	}
@@ -1166,11 +1165,9 @@ HRESULT STDMETHODCALLTYPE D3D10Device::CreatePixelShader(const void *pShaderByte
 	reshade::api::pipeline_desc desc = { reshade::api::pipeline_stage::pixel_shader };
 	desc.graphics.pixel_shader.code = pShaderBytecode;
 	desc.graphics.pixel_shader.code_size = BytecodeLength;
-	desc.graphics.pixel_shader.format = reshade::api::shader_format::dxbc;
 
 	if (reshade::invoke_addon_event<reshade::addon_event::create_pipeline>(this, desc))
 	{
-		assert(desc.graphics.pixel_shader.format == reshade::api::shader_format::dxbc);
 		pShaderBytecode = desc.graphics.pixel_shader.code;
 		BytecodeLength  = desc.graphics.pixel_shader.code_size;
 	}
