@@ -11,6 +11,7 @@
 #include <Psapi.h>
 
 #define RESHADE_API_VERSION 1
+#define RESHADE_API_VERSION_IMGUI IMGUI_VERSION_NUM
 
 namespace reshade
 {
@@ -82,15 +83,15 @@ namespace reshade
 		if (!func(module, RESHADE_API_VERSION))
 			return false;
 
-#ifdef IMGUI_VERSION
-		// Check that the ReShade module was built with imgui support
-		const auto imgui_func = reinterpret_cast<const imgui_function_table *(*)(unsigned int)>(
+#if defined(IMGUI_VERSION)
+		// Check that the ReShade module was built with Dear ImGui support
+		const auto imgui_func = reinterpret_cast<const imgui_function_table *(*)(uint32_t)>(
 			GetProcAddress(reshade_module, "ReShadeGetImGuiFunctionTable"));
 		if (imgui_func == nullptr)
 			return false;
 
-		// Check that the ReShade module supports the used imgui version
-		const imgui_function_table *const imgui_table = imgui_func(IMGUI_VERSION_NUM);
+		// Check that the ReShade module supports the used Dear ImGui version
+		const imgui_function_table *const imgui_table = imgui_func(RESHADE_API_VERSION_IMGUI);
 		if (imgui_table == nullptr)
 			return false;
 		g_imgui_function_table = *imgui_table;
@@ -139,7 +140,7 @@ namespace reshade
 
 	/// <summary>
 	/// Registers an overlay with ReShade.
-	/// <para>The callback function is then called whenever the ReShade overlay is visible and allows adding imgui widgets for user interaction.</para>
+	/// <para>The callback function is then called whenever the ReShade overlay is visible and allows adding Dear ImGui widgets for user interaction.</para>
 	/// </summary>
 	/// <param name="title">A null-terminated title string, or <c>nullptr</c> to register a settings overlay for this add-on.</param>
 	/// <param name="callback">Pointer to the callback function.</param>
@@ -147,7 +148,8 @@ namespace reshade
 	{
 		static const auto func = reinterpret_cast<void(*)(const char *, void(*)(reshade::api::effect_runtime *, void *))>(
 			GetProcAddress(get_reshade_module_handle(), "ReShadeRegisterOverlay"));
-		func(title, callback);
+		if (func != nullptr) // May not exist if ReShade was built without "RESHADE_GUI" defined
+			func(title, callback);
 	}
 	/// <summary>
 	/// Unregisters an overlay that was previously registered via <see cref="register_overlay"/>.
@@ -157,6 +159,7 @@ namespace reshade
 	{
 		static const auto func = reinterpret_cast<void(*)(const char *)>(
 			GetProcAddress(get_reshade_module_handle(), "ReShadeUnregisterOverlay"));
-		func(title);
+		if (func != nullptr)
+			func(title);
 	}
 }

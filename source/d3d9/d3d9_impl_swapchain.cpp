@@ -99,6 +99,9 @@ bool reshade::d3d9::swapchain_impl::on_init(const D3DPRESENT_PARAMETERS &pp)
 }
 void reshade::d3d9::swapchain_impl::on_reset()
 {
+	if (_backbuffer == nullptr)
+		return;
+
 	runtime::on_reset();
 
 #if RESHADE_ADDON
@@ -140,4 +143,21 @@ void reshade::d3d9::swapchain_impl::on_present()
 		device_impl->_orig->SetSoftwareVertexProcessing(software_rendering_enabled);
 
 	device_impl->_orig->EndScene();
+}
+
+void reshade::d3d9::swapchain_impl::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)
+{
+	const auto device_impl = static_cast<class device_impl *>(_device);
+
+	_app_state.capture();
+	BOOL software_rendering_enabled = FALSE;
+	if ((device_impl->_cp.BehaviorFlags & D3DCREATE_MIXED_VERTEXPROCESSING) != 0)
+		software_rendering_enabled = device_impl->_orig->GetSoftwareVertexProcessing(),
+		device_impl->_orig->SetSoftwareVertexProcessing(FALSE); // Disable software vertex processing since it is incompatible with programmable shaders
+
+	runtime::render_effects(cmd_list, rtv, rtv_srgb);
+
+	_app_state.apply_and_release();
+	if ((device_impl->_cp.BehaviorFlags & D3DCREATE_MIXED_VERTEXPROCESSING) != 0)
+		device_impl->_orig->SetSoftwareVertexProcessing(software_rendering_enabled);
 }

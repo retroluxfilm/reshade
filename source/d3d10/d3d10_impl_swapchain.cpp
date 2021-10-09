@@ -111,6 +111,9 @@ bool reshade::d3d10::swapchain_impl::on_init()
 }
 void reshade::d3d10::swapchain_impl::on_reset()
 {
+	if (_backbuffer == nullptr)
+		return;
+
 	runtime::on_reset();
 
 #if RESHADE_ADDON
@@ -166,7 +169,7 @@ void reshade::d3d10::swapchain_impl::on_present()
 	_app_state.apply_and_release();
 }
 
-bool reshade::d3d10::swapchain_impl::on_layer_submit(UINT eye, ID3D10Texture2D *source, const float bounds[4], ID3D10Texture2D **target)
+bool reshade::d3d10::swapchain_impl::on_vr_submit(UINT eye, ID3D10Texture2D *source, const float bounds[4], ID3D10Texture2D **target)
 {
 	assert(eye < 2 && source != nullptr);
 
@@ -237,4 +240,13 @@ bool reshade::d3d10::swapchain_impl::on_layer_submit(UINT eye, ID3D10Texture2D *
 	*target = _backbuffer.get();
 
 	return true;
+}
+
+void reshade::d3d10::swapchain_impl::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)
+{
+	_app_state.capture();
+
+	runtime::render_effects(cmd_list, rtv, rtv_srgb);
+
+	_app_state.apply_and_release();
 }

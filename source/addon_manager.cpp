@@ -5,6 +5,7 @@
 
 #if RESHADE_ADDON
 
+#include "version.h"
 #include "reshade.hpp"
 #include "addon_manager.hpp"
 #include "dll_log.hpp"
@@ -22,8 +23,11 @@ std::vector<std::pair<std::string, void(*)(reshade::api::effect_runtime *, void 
 #endif
 static unsigned long s_reference_count = 0;
 
-extern void register_builtin_addon_depth(reshade::addon::info &info);
-extern void unregister_builtin_addon_depth();
+#ifndef RESHADE_TEST_APPLICATION
+#pragma comment(lib, "GenericDepth.lib")
+extern void register_addon_depth();
+extern void unregister_addon_depth();
+#endif
 
 void reshade::load_addons()
 {
@@ -31,10 +35,21 @@ void reshade::load_addons()
 	if (s_reference_count++ != 0)
 		return;
 
+#ifndef RESHADE_TEST_APPLICATION
 #if RESHADE_VERBOSE_LOG
 	LOG(INFO) << "Loading built-in add-ons ...";
 #endif
-	register_builtin_addon_depth(addon::loaded_info.emplace_back());
+
+	{	addon::info &info = addon::loaded_info.emplace_back();
+		info.name = "Generic Depth";
+		info.description = "Automatic depth buffer detection that works in the majority of games.";
+		info.file = g_reshade_dll_path.u8string();
+		info.author = "crosire";
+		info.version = VERSION_STRING_FILE;
+
+		register_addon_depth();
+	}
+#endif
 
 #if RESHADE_ADDON_LOAD
 	// Get directory from where to load add-ons from
@@ -69,7 +84,9 @@ void reshade::unload_addons()
 		return;
 
 #if RESHADE_ADDON_LOAD
-	for (const reshade::addon::info &info : addon::loaded_info)
+	// Create copy of add-on list before unloading, since add-ons call 'ReShadeUnregisterAddon' during 'FreeLibrary', which modifies the list
+	const std::vector<reshade::addon::info> loaded_info_copy = addon::loaded_info;
+	for (const reshade::addon::info &info : loaded_info_copy)
 	{
 		if (info.handle == nullptr)
 			continue; // Skip built-in add-ons
@@ -82,10 +99,13 @@ void reshade::unload_addons()
 	}
 #endif
 
+#ifndef RESHADE_TEST_APPLICATION
 #if RESHADE_VERBOSE_LOG
 	LOG(INFO) << "Unloading built-in add-ons ...";
 #endif
-	unregister_builtin_addon_depth();
+
+	unregister_addon_depth();
+#endif
 
 	addon::loaded_info.clear();
 }
@@ -256,11 +276,13 @@ void ReShadeUnregisterAddon(HMODULE module)
 	if (info == nullptr)
 		return;
 
+#if RESHADE_GUI
 	// Unregister all overlays associated with this add-on
 	while (!info->overlay_titles.empty())
 	{
 		ReShadeUnregisterOverlay(info->overlay_titles.back().c_str());
 	}
+#endif
 
 	// Unregister all event callbacks registered by this add-on
 	while (!info->event_callbacks.empty())
