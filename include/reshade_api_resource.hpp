@@ -67,7 +67,7 @@ namespace reshade { namespace api
 	/// </summary>
 	enum class map_access
 	{
-		read_only,
+		read_only = 1,
 		write_only,
 		read_write,
 		write_discard
@@ -128,6 +128,8 @@ namespace reshade { namespace api
 		copy_source = 0x800,
 		resolve_dest = 0x1000,
 		resolve_source = 0x2000,
+
+		// The following are resource states and may only be used in 'command_list::barrier'.
 
 		general = 0x80000000,
 		present = 0x80000000 | render_target | copy_source,

@@ -11,11 +11,11 @@
 
 namespace reshade::api
 {
-	struct api_object;
-	struct effect_runtime;
+	class api_object;
+	class effect_runtime;
 
 	template <typename T, typename... api_object_base>
-	class  api_object_impl : public api_object_base...
+	class api_object_impl : public api_object_base...
 	{
 		static_assert(sizeof(T) <= sizeof(uint64_t));
 
@@ -98,7 +98,7 @@ namespace reshade::addon
 #if RESHADE_GUI
 		float settings_height = 0.0f;
 		void(*settings_overlay_callback)(api::effect_runtime *, void *) = nullptr;
-		std::vector<std::string> overlay_titles;
+		std::vector<std::pair<std::string, void(*)(api::effect_runtime *, void *)>> overlay_callbacks;
 #endif
 	};
 
@@ -116,13 +116,6 @@ namespace reshade::addon
 	/// List of currently loaded add-ons.
 	/// </summary>
 	extern std::vector<addon::info> loaded_info;
-
-#if RESHADE_GUI
-	/// <summary>
-	/// List of overlays registered by loaded add-ons.
-	/// </summary>
-	extern std::vector<std::pair<std::string, void(*)(api::effect_runtime *, void *)>> overlay_list;
-#endif
 }
 
 #endif

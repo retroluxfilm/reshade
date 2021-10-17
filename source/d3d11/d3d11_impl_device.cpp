@@ -448,9 +448,9 @@ bool reshade::d3d11::device_impl::create_graphics_pipeline(const api::pipeline_d
 		return false;
 	}
 
-#define create_state_object(name, type, extra_check) \
+#define create_state_object(name, type, condition) \
 	api::pipeline name##_handle = { 0 }; \
-	if (extra_check && !create_##name(desc, &name##_handle)) { \
+	if (condition && !create_##name(desc, &name##_handle)) { \
 		*out_handle = { 0 }; \
 		return false; \
 	} \
@@ -875,41 +875,58 @@ void reshade::d3d11::device_impl::destroy_descriptor_sets(uint32_t count, const 
 		delete reinterpret_cast<descriptor_set_impl *>(sets[i].handle);
 }
 
-bool reshade::d3d11::device_impl::map_resource(api::resource resource, uint32_t subresource, api::map_access access, api::subresource_data *out_data)
+bool reshade::d3d11::device_impl::map_buffer_region(api::resource resource, uint64_t offset, uint64_t, api::map_access access, void **out_data)
 {
-	static_assert(sizeof(api::subresource_data) == sizeof(D3D11_MAPPED_SUBRESOURCE));
-
-	D3D11_MAP map_type = static_cast<D3D11_MAP>(0);
-	switch (access)
-	{
-	case api::map_access::read_only:
-		map_type = D3D11_MAP_READ;
-		break;
-	case api::map_access::write_only:
-		// Use no overwrite flag to simulate D3D12 behavior of there only being one allocation that backs a buffer (instead of the runtime managing multiple ones behind the scenes)
-		map_type = D3D11_MAP_WRITE_NO_OVERWRITE;
-		break;
-	case api::map_access::read_write:
-		map_type = D3D11_MAP_READ_WRITE;
-		break;
-	case api::map_access::write_discard:
-		map_type = D3D11_MAP_WRITE_DISCARD;
-		break;
-	}
-
-	assert(out_data != nullptr);
-	out_data->data = nullptr;
-	out_data->row_pitch = 0;
-	out_data->slice_pitch = 0;
+	if (out_data == nullptr)
+		return false;
 
 	assert(resource.handle != 0);
 
 	com_ptr<ID3D11DeviceContext> immediate_context;
 	_orig->GetImmediateContext(&immediate_context);
 
-	return SUCCEEDED(immediate_context->Map(reinterpret_cast<ID3D11Resource *>(resource.handle), subresource, map_type, 0, reinterpret_cast<D3D11_MAPPED_SUBRESOURCE *>(out_data)));
+	if (D3D11_MAPPED_SUBRESOURCE mapped_ptr;
+		SUCCEEDED(immediate_context->Map(reinterpret_cast<ID3D11Buffer *>(resource.handle), 0, convert_access_flags(access), 0, &mapped_ptr)))
+	{
+		*out_data = static_cast<uint8_t *>(mapped_ptr.pData) + offset;
+		return true;
+	}
+	else
+	{
+		*out_data = 0;
+		return false;
+	}
 }
-void reshade::d3d11::device_impl::unmap_resource(api::resource resource, uint32_t subresource)
+void reshade::d3d11::device_impl::unmap_buffer_region(api::resource resource)
+{
+	assert(resource.handle != 0);
+
+	com_ptr<ID3D11DeviceContext> immediate_context;
+	_orig->GetImmediateContext(&immediate_context);
+
+	immediate_context->Unmap(reinterpret_cast<ID3D11Buffer *>(resource.handle), 0);
+}
+bool reshade::d3d11::device_impl::map_texture_region(api::resource resource, uint32_t subresource, const int32_t box[6], api::map_access access, api::subresource_data *out_data)
+{
+	if (out_data == nullptr)
+		return false;
+
+	out_data->data = nullptr;
+	out_data->row_pitch = 0;
+	out_data->slice_pitch = 0;
+
+	// Mapping a subset of a texture is not supported
+	if (box != nullptr)
+		return false;
+
+	assert(resource.handle != 0);
+
+	com_ptr<ID3D11DeviceContext> immediate_context;
+	_orig->GetImmediateContext(&immediate_context);
+
+	return SUCCEEDED(immediate_context->Map(reinterpret_cast<ID3D11Resource *>(resource.handle), subresource, convert_access_flags(access), 0, reinterpret_cast<D3D11_MAPPED_SUBRESOURCE *>(out_data)));
+}
+void reshade::d3d11::device_impl::unmap_texture_region(api::resource resource, uint32_t subresource)
 {
 	assert(resource.handle != 0);
 
@@ -919,25 +936,26 @@ void reshade::d3d11::device_impl::unmap_resource(api::resource resource, uint32_
 	immediate_context->Unmap(reinterpret_cast<ID3D11Resource *>(resource.handle), subresource);
 }
 
-void reshade::d3d11::device_impl::update_buffer_region(const void *data, api::resource dst, uint64_t dst_offset, uint64_t size)
+void reshade::d3d11::device_impl::update_buffer_region(const void *data, api::resource resource, uint64_t offset, uint64_t size)
 {
-	assert(dst.handle != 0);
-	assert(dst_offset <= std::numeric_limits<UINT>::max() && size <= std::numeric_limits<UINT>::max());
+	assert(resource.handle != 0);
+	assert(offset <= std::numeric_limits<UINT>::max() && size <= std::numeric_limits<UINT>::max());
 
 	com_ptr<ID3D11DeviceContext> immediate_context;
 	_orig->GetImmediateContext(&immediate_context);
 
-	const D3D11_BOX dst_box = { static_cast<UINT>(dst_offset), 0, 0, static_cast<UINT>(dst_offset + size), 1, 1 };
-	immediate_context->UpdateSubresource(reinterpret_cast<ID3D11Resource *>(dst.handle), 0, dst_offset != 0 ? &dst_box : nullptr, data, static_cast<UINT>(size), 0);
+	const D3D11_BOX box = { static_cast<UINT>(offset), 0, 0, static_cast<UINT>(offset + size), 1, 1 };
+
+	immediate_context->UpdateSubresource(reinterpret_cast<ID3D11Resource *>(resource.handle), 0, offset != 0 ? &box : nullptr, data, static_cast<UINT>(size), 0);
 }
-void reshade::d3d11::device_impl::update_texture_region(const api::subresource_data &data, api::resource dst, uint32_t dst_subresource, const int32_t dst_box[6])
+void reshade::d3d11::device_impl::update_texture_region(const api::subresource_data &data, api::resource resource, uint32_t subresource, const int32_t box[6])
 {
-	assert(dst.handle != 0);
+	assert(resource.handle != 0);
 
 	com_ptr<ID3D11DeviceContext> immediate_context;
 	_orig->GetImmediateContext(&immediate_context);
 
-	immediate_context->UpdateSubresource(reinterpret_cast<ID3D11Resource *>(dst.handle), dst_subresource, reinterpret_cast<const D3D11_BOX *>(dst_box), data.data, data.row_pitch, data.slice_pitch);
+	immediate_context->UpdateSubresource(reinterpret_cast<ID3D11Resource *>(resource.handle), subresource, reinterpret_cast<const D3D11_BOX *>(box), data.data, data.row_pitch, data.slice_pitch);
 }
 
 void reshade::d3d11::device_impl::update_descriptor_sets(uint32_t count, const api::descriptor_set_update *updates)
@@ -970,6 +988,7 @@ void reshade::d3d11::device_impl::update_descriptor_sets(uint32_t count, const a
 bool reshade::d3d11::device_impl::get_query_pool_results(api::query_pool pool, uint32_t first, uint32_t count, void *results, uint32_t stride)
 {
 	assert(pool.handle != 0);
+
 	const auto impl = reinterpret_cast<query_pool_impl *>(pool.handle);
 
 	com_ptr<ID3D11DeviceContext> immediate_context;
@@ -995,6 +1014,7 @@ void reshade::d3d11::device_impl::set_resource_name(api::resource resource, cons
 void reshade::d3d11::device_impl::get_pipeline_layout_desc(api::pipeline_layout layout, uint32_t *count, api::pipeline_layout_param *params) const
 {
 	assert(layout.handle != 0 && count != nullptr);
+
 	const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
 
 	if (params != nullptr)
@@ -1017,6 +1037,7 @@ void reshade::d3d11::device_impl::get_descriptor_pool_offset(api::descriptor_set
 void reshade::d3d11::device_impl::get_descriptor_set_layout_desc(api::descriptor_set_layout layout, uint32_t *count, api::descriptor_range *ranges) const
 {
 	assert(layout.handle != 0 && count != nullptr);
+
 	const auto layout_impl = reinterpret_cast<descriptor_set_layout_impl *>(layout.handle);
 
 	if (ranges != nullptr)
@@ -1036,6 +1057,7 @@ void reshade::d3d11::device_impl::get_descriptor_set_layout_desc(api::descriptor
 reshade::api::resource_desc reshade::d3d11::device_impl::get_resource_desc(api::resource resource) const
 {
 	assert(resource.handle != 0);
+
 	const auto object = reinterpret_cast<ID3D11Resource *>(resource.handle);
 
 	D3D11_RESOURCE_DIMENSION dimension;
@@ -1075,6 +1097,7 @@ reshade::api::resource_desc reshade::d3d11::device_impl::get_resource_desc(api::
 reshade::api::resource reshade::d3d11::device_impl::get_resource_from_view(api::resource_view view) const
 {
 	assert(view.handle != 0);
+
 	com_ptr<ID3D11Resource> resource;
 	reinterpret_cast<ID3D11View *>(view.handle)->GetResource(&resource);
 
@@ -1084,6 +1107,7 @@ reshade::api::resource reshade::d3d11::device_impl::get_resource_from_view(api::
 reshade::api::resource_view reshade::d3d11::device_impl::get_framebuffer_attachment(api::framebuffer fbo, api::attachment_type type, uint32_t index) const
 {
 	assert(fbo.handle != 0);
+
 	const auto fbo_impl = reinterpret_cast<const framebuffer_impl *>(fbo.handle);
 
 	if (type == api::attachment_type::color)

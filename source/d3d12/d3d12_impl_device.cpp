@@ -371,7 +371,6 @@ void reshade::d3d12::device_impl::destroy_resource_view(api::resource_view handl
 	D3D12_CPU_DESCRIPTOR_HANDLE descriptor_handle = { static_cast<SIZE_T>(handle.handle) };
 
 	const std::unique_lock<std::shared_mutex> lock(_resource_mutex);
-
 	_views.erase(descriptor_handle.ptr);
 
 	for (UINT i = 0; i < D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES; ++i)
@@ -761,9 +760,45 @@ void reshade::d3d12::device_impl::destroy_descriptor_sets(uint32_t count, const 
 	}
 }
 
-bool reshade::d3d12::device_impl::map_resource(api::resource resource, uint32_t subresource, api::map_access access, api::subresource_data *out_data)
+bool reshade::d3d12::device_impl::map_buffer_region(api::resource resource, uint64_t offset, uint64_t, api::map_access access, void **out_data)
 {
-	assert(out_data != nullptr);
+	if (out_data == nullptr)
+		return false;
+
+	assert(resource.handle != 0);
+
+	const D3D12_RANGE no_read = { 0, 0 };
+
+	if (SUCCEEDED(reinterpret_cast<ID3D12Resource *>(resource.handle)->Map(
+		0, access == api::map_access::write_only || access == api::map_access::write_discard ? &no_read : nullptr, out_data)))
+	{
+		*out_data = static_cast<uint8_t *>(*out_data) + offset;
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
+void reshade::d3d12::device_impl::unmap_buffer_region(api::resource resource)
+{
+	assert(resource.handle != 0);
+
+	reinterpret_cast<ID3D12Resource *>(resource.handle)->Unmap(0, nullptr);
+}
+bool reshade::d3d12::device_impl::map_texture_region(api::resource resource, uint32_t subresource, const int32_t box[6], api::map_access access, api::subresource_data *out_data)
+{
+	if (out_data == nullptr)
+		return false;
+
+	out_data->data = nullptr;
+	out_data->row_pitch = 0;
+	out_data->slice_pitch = 0;
+
+	// Mapping a subset of a texture is not supported
+	if (box != nullptr)
+		return false;
+
 	assert(resource.handle != 0);
 
 	const D3D12_RANGE no_read = { 0, 0 };
@@ -777,20 +812,16 @@ bool reshade::d3d12::device_impl::map_resource(api::resource resource, uint32_t 
 	return SUCCEEDED(reinterpret_cast<ID3D12Resource *>(resource.handle)->Map(
 		subresource, access == api::map_access::write_only || access == api::map_access::write_discard ? &no_read : nullptr, &out_data->data));
 }
-void reshade::d3d12::device_impl::unmap_resource(api::resource resource, uint32_t subresource)
+void reshade::d3d12::device_impl::unmap_texture_region(api::resource resource, uint32_t subresource)
 {
 	assert(resource.handle != 0);
 
 	reinterpret_cast<ID3D12Resource *>(resource.handle)->Unmap(subresource, nullptr);
 }
 
-void reshade::d3d12::device_impl::update_buffer_region(const void *data, api::resource dst, uint64_t dst_offset, uint64_t size)
+void reshade::d3d12::device_impl::update_buffer_region(const void *data, api::resource resource, uint64_t offset, uint64_t size)
 {
-	assert(dst.handle != 0);
-	assert(!_queues.empty());
-
-	const auto dst_resource = reinterpret_cast<ID3D12Resource *>(dst.handle);
-	const D3D12_RESOURCE_DESC dst_desc = dst_resource->GetDesc();
+	assert(resource.handle != 0);
 
 	// Allocate host memory for upload
 	D3D12_RESOURCE_DESC intermediate_desc = { D3D12_RESOURCE_DIMENSION_BUFFER };
@@ -821,13 +852,15 @@ void reshade::d3d12::device_impl::update_buffer_region(const void *data, api::re
 
 	intermediate->Unmap(0, nullptr);
 
+	assert(!_queues.empty());
+
 	// Copy data from upload buffer into target texture using the first available immediate command list
 	for (command_queue_impl *const queue : _queues)
 	{
 		const auto immediate_command_list = static_cast<command_list_immediate_impl *>(queue->get_immediate_command_list());
 		if (immediate_command_list != nullptr)
 		{
-			immediate_command_list->copy_buffer_region(api::resource { reinterpret_cast<uintptr_t>(intermediate.get()) }, 0, dst, dst_offset, size);
+			immediate_command_list->copy_buffer_region(api::resource { reinterpret_cast<uintptr_t>(intermediate.get()) }, 0, resource, offset, size);
 
 			// Wait for command to finish executing before destroying the upload buffer
 			immediate_command_list->flush_and_wait(queue->_orig);
@@ -835,27 +868,25 @@ void reshade::d3d12::device_impl::update_buffer_region(const void *data, api::re
 		}
 	}
 }
-void reshade::d3d12::device_impl::update_texture_region(const api::subresource_data &data, api::resource dst, uint32_t dst_subresource, const int32_t dst_box[6])
+void reshade::d3d12::device_impl::update_texture_region(const api::subresource_data &data, api::resource resource, uint32_t subresource, const int32_t box[6])
 {
-	assert(dst.handle != 0);
-	assert(!_queues.empty());
+	assert(resource.handle != 0);
 
-	const auto dst_resource = reinterpret_cast<ID3D12Resource *>(dst.handle);
-	const D3D12_RESOURCE_DESC dst_desc = dst_resource->GetDesc();
+	const D3D12_RESOURCE_DESC desc = reinterpret_cast<ID3D12Resource *>(resource.handle)->GetDesc();
 
-	UINT width = static_cast<UINT>(dst_desc.Width);
-	UINT num_rows = dst_desc.Height;
-	UINT num_slices = dst_desc.DepthOrArraySize;
-	if (dst_box != nullptr)
+	UINT width = static_cast<UINT>(desc.Width);
+	UINT num_rows = desc.Height;
+	UINT num_slices = desc.DepthOrArraySize;
+	if (box != nullptr)
 	{
-		width = dst_box[3] - dst_box[0];
-		num_rows = dst_box[4] - dst_box[1];
-		num_slices = dst_box[5] - dst_box[2];
+		width = box[3] - box[0];
+		num_rows = box[4] - box[1];
+		num_slices = box[5] - box[2];
 	}
 
-	auto row_pitch = width * api::format_bytes_per_pixel(convert_format(dst_desc.Format));
+	auto row_pitch = api::format_row_pitch(convert_format(desc.Format), width);
 	row_pitch = (row_pitch + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u) & ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u);
-	const auto slice_pitch = num_rows * row_pitch;
+	const auto slice_pitch = api::format_slice_pitch(convert_format(desc.Format), row_pitch, num_rows);
 
 	// Allocate host memory for upload
 	D3D12_RESOURCE_DESC intermediate_desc = { D3D12_RESOURCE_DIMENSION_BUFFER };
@@ -899,13 +930,15 @@ void reshade::d3d12::device_impl::update_texture_region(const api::subresource_d
 
 	intermediate->Unmap(0, nullptr);
 
+	assert(!_queues.empty());
+
 	// Copy data from upload buffer into target texture using the first available immediate command list
 	for (command_queue_impl *const queue : _queues)
 	{
 		const auto immediate_command_list = static_cast<command_list_immediate_impl *>(queue->get_immediate_command_list());
 		if (immediate_command_list != nullptr)
 		{
-			immediate_command_list->copy_buffer_to_texture(api::resource { reinterpret_cast<uintptr_t>(intermediate.get()) }, 0, 0, 0, dst, dst_subresource, dst_box);
+			immediate_command_list->copy_buffer_to_texture(api::resource { reinterpret_cast<uintptr_t>(intermediate.get()) }, 0, 0, 0, resource, subresource, box);
 
 			// Wait for command to finish executing before destroying the upload buffer
 			immediate_command_list->flush_and_wait(queue->_orig);
@@ -1034,6 +1067,7 @@ void reshade::d3d12::device_impl::get_descriptor_pool_offset(api::descriptor_set
 void reshade::d3d12::device_impl::get_descriptor_set_layout_desc(api::descriptor_set_layout layout, uint32_t *count, api::descriptor_range *ranges) const
 {
 	assert(layout.handle != 0 && count != nullptr);
+
 	const auto layout_impl = reinterpret_cast<const descriptor_set_layout_impl *>(layout.handle);
 
 	if (ranges != nullptr)
@@ -1076,6 +1110,7 @@ reshade::api::resource reshade::d3d12::device_impl::get_resource_from_view(api::
 reshade::api::resource_view reshade::d3d12::device_impl::get_framebuffer_attachment(api::framebuffer fbo, api::attachment_type type, uint32_t index) const
 {
 	assert(fbo.handle != 0);
+
 	const auto fbo_impl = reinterpret_cast<const framebuffer_impl *>(fbo.handle);
 
 	if (type == api::attachment_type::color)
@@ -1147,12 +1182,14 @@ void reshade::d3d12::device_impl::unregister_resource(ID3D12Resource *resource)
 void reshade::d3d12::device_impl::register_descriptor_heap(ID3D12DescriptorHeap *heap)
 {
 	assert(heap != nullptr);
+
 	const std::unique_lock<std::shared_mutex> lock(_heap_mutex);
 	_descriptor_heaps.push_back(heap);
 }
 void reshade::d3d12::device_impl::unregister_descriptor_heap(ID3D12DescriptorHeap *heap)
 {
 	assert(heap != nullptr);
+
 	const std::unique_lock<std::shared_mutex> lock(_heap_mutex);
 	_descriptor_heaps.erase(std::find(_descriptor_heaps.begin(), _descriptor_heaps.end(), heap));
 }

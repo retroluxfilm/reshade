@@ -17,10 +17,14 @@ extern "C" void WINAPI glBindBuffersBase(GLenum target, GLuint first, GLsizei co
 extern "C" void WINAPI glBindBuffersRange(GLenum target, GLuint first, GLsizei count, const GLuint *buffers, const GLintptr *offsets, const GLintptr *sizes);
 #undef glBindFramebuffer
 extern "C" void WINAPI glBindFramebuffer(GLenum target, GLuint framebuffer);
+#undef glBindFramebufferEXT
+extern "C" void WINAPI glBindFramebufferEXT(GLenum target, GLuint framebuffer);
 #undef glBindImageTexture
 extern "C" void WINAPI glBindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access, GLenum format);
 #undef glBindImageTextures
 extern "C" void WINAPI glBindImageTextures(GLuint first, GLsizei count, const GLuint *textures);
+#undef glBindMultiTextureEXT
+extern "C" void WINAPI glBindMultiTextureEXT(GLenum texunit, GLenum target, GLuint texture);
 #undef glBindTexture
 extern "C" void WINAPI glBindTexture(GLenum target, GLuint texture);
 #undef glBindTextureUnit
@@ -188,11 +192,11 @@ extern "C" void WINAPI glGetFloatv(GLenum pname, GLfloat *params);
 #undef glGetIntegerv
 extern "C" void WINAPI glGetIntegerv(GLenum pname, GLint *params);
 #undef glGetError
-extern "C" GLenum WINAPI glGetError();
+extern "C" auto WINAPI glGetError() -> GLenum;
 #undef glGetPointerv
 extern "C" void WINAPI glGetPointerv(GLenum pname, GLvoid **params);
 #undef glGetString
-extern "C" const GLubyte *WINAPI glGetString(GLenum name);
+extern "C" auto WINAPI glGetString(GLenum name) -> const GLubyte *;
 #undef glGetTexImage
 extern "C" void WINAPI glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels);
 #undef glGetTexLevelParameterfv
@@ -206,15 +210,23 @@ extern "C" void WINAPI glGetTexParameteriv(GLenum target, GLenum pname, GLint *p
 #undef glHint
 extern "C" void WINAPI glHint(GLenum target, GLenum mode);
 #undef glIsEnabled
-extern "C" GLboolean WINAPI glIsEnabled(GLenum cap);
+extern "C" auto WINAPI glIsEnabled(GLenum cap) -> GLboolean;
 #undef glIsTexture
-extern "C" GLboolean WINAPI glIsTexture(GLuint texture);
+extern "C" auto WINAPI glIsTexture(GLuint texture) -> GLboolean;
 #undef glLineWidth
 extern "C" void WINAPI glLineWidth(GLfloat width);
 #undef glLinkProgram
 extern "C" void WINAPI glLinkProgram(GLuint program);
 #undef glLogicOp
 extern "C" void WINAPI glLogicOp(GLenum opcode);
+#undef glMapBuffer
+extern "C" auto WINAPI glMapBuffer(GLenum target, GLenum access) -> void *;
+#undef glMapBufferRange
+extern "C" auto WINAPI glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLenum access) -> void *;
+#undef glMapNamedBuffer
+extern "C" auto WINAPI glMapNamedBuffer(GLuint buffer, GLenum access) -> void *;
+#undef glMapNamedBufferRange
+extern "C" auto WINAPI glMapNamedBufferRange(GLuint buffer, GLintptr offset, GLsizeiptr length, GLenum access) -> void *;
 #undef glMultiDrawArrays
 extern "C" void WINAPI glMultiDrawArrays(GLenum mode, const GLint *first, const GLsizei *count, GLsizei drawcount);
 #undef glMultiDrawArraysIndirect
@@ -381,6 +393,10 @@ extern "C" void WINAPI glUniform2uiv(GLint location, GLsizei count, const GLuint
 extern "C" void WINAPI glUniform3uiv(GLint location, GLsizei count, const GLuint *v);
 #undef glUniform4uiv
 extern "C" void WINAPI glUniform4uiv(GLint location, GLsizei count, const GLuint *v);
+#undef glUnmapBuffer
+extern "C" void WINAPI glUnmapBuffer(GLenum target);
+#undef glUnmapNamedBuffer
+extern "C" void WINAPI glUnmapNamedBuffer(GLuint buffer);
 #undef glUseProgram
 extern "C" void WINAPI glUseProgram(GLuint program);
 #undef glViewport

@@ -3,7 +3,10 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "d3d9_impl_device.hpp"
+#include <vector>
+#include <limits>
+#include "com_ptr.hpp"
+#include "reshade_api_pipeline.hpp"
 #include "d3d9_impl_type_convert.hpp"
 
 auto reshade::d3d9::convert_format(api::format format, bool lockable) -> D3DFORMAT
@@ -296,6 +299,26 @@ void reshade::d3d9::convert_d3d_pool_to_memory_heap(D3DPOOL d3d_pool, api::memor
 		heap = api::memory_heap::cpu_only;
 		break;
 	}
+}
+
+auto reshade::d3d9::convert_access_flags(api::map_access access) -> DWORD
+{
+	switch (access)
+	{
+	case api::map_access::read_only:
+		return D3DLOCK_READONLY;
+	case api::map_access::write_discard:
+		return D3DLOCK_DISCARD;
+	}
+	return 0;
+}
+reshade::api::map_access reshade::d3d9::convert_access_flags(DWORD lock_flags)
+{
+	if ((lock_flags & D3DLOCK_READONLY) != 0)
+		return reshade::api::map_access::read_only;
+	else if ((lock_flags & D3DLOCK_DISCARD) != 0)
+		return reshade::api::map_access::write_discard;
+	return reshade::api::map_access::read_write;
 }
 
 void reshade::d3d9::convert_resource_usage_to_d3d_usage(api::resource_usage usage, DWORD &d3d_usage)

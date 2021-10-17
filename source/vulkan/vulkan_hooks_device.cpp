@@ -13,6 +13,9 @@
 #include "vulkan_impl_type_convert.hpp"
 #include <malloc.h>
 
+// Set during Vulkan device creation and presentation, to avoid hooking internal D3D devices created e.g. by NVIDIA Ansel and Optimus
+extern thread_local bool g_in_dxgi_runtime;
+
 lockfree_linear_map<void *, reshade::vulkan::device_impl *, 8> g_vulkan_devices;
 static lockfree_linear_map<VkQueue, reshade::vulkan::command_queue_impl *, 16> s_vulkan_queues;
 extern lockfree_linear_map<void *, instance_dispatch_table, 4> g_instance_dispatch;
@@ -28,31 +31,9 @@ static lockfree_linear_map<VkSwapchainKHR, reshade::vulkan::swapchain_impl *, 16
 #define INIT_DISPATCH_PTR(name) \
 	dispatch_table.name = reinterpret_cast<PFN_vk##name>(get_device_proc(device, "vk" #name))
 
-static inline const char *vk_format_to_string(VkFormat format)
-{
-	switch (format)
-	{
-	case VK_FORMAT_UNDEFINED:
-		return "VK_FORMAT_UNDEFINED";
-	case VK_FORMAT_R8G8B8A8_UNORM:
-		return "VK_FORMAT_R8G8B8A8_UNORM";
-	case VK_FORMAT_R8G8B8A8_SRGB:
-		return "VK_FORMAT_R8G8B8A8_SRGB";
-	case VK_FORMAT_B8G8R8A8_UNORM:
-		return "VK_FORMAT_B8G8R8A8_UNORM";
-	case VK_FORMAT_B8G8R8A8_SRGB:
-		return "VK_FORMAT_B8G8R8A8_SRGB";
-	case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
-		return "VK_FORMAT_A2R10G10B10_UNORM_PACK32";
-	case VK_FORMAT_R16G16B16A16_SFLOAT:
-		return "VK_FORMAT_R16G16B16A16_SFLOAT";
-	default:
-		return nullptr;
-	}
-}
-
 extern VkImageAspectFlags aspect_flags_from_format(VkFormat format);
 
+#if RESHADE_ADDON
 static void create_default_view(reshade::vulkan::device_impl *device_impl, VkImage image)
 {
 	if (image == VK_NULL_HANDLE)
@@ -87,6 +68,7 @@ static void destroy_default_view(reshade::vulkan::device_impl *device_impl, VkIm
 		vkDestroyImageView(device_impl->_orig, default_view, nullptr);
 	}
 }
+#endif
 
 VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDevice *pDevice)
 {
@@ -284,7 +266,9 @@ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevi
 	}
 
 	// Continue calling down the chain
+	g_in_dxgi_runtime = true;
 	const VkResult result = trampoline(physicalDevice, &create_info, pAllocator, pDevice);
+	g_in_dxgi_runtime = false;
 	if (result < VK_SUCCESS)
 	{
 		LOG(WARN) << "vkCreateDevice" << " failed with error code " << result << '.';
@@ -594,10 +578,38 @@ VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreat
 	LOG(INFO) << "  | flags                                   | " << std::setw(39) << std::hex << create_info.flags << std::dec << " |";
 	LOG(INFO) << "  | surface                                 | " << std::setw(39) << create_info.surface << " |";
 	LOG(INFO) << "  | minImageCount                           | " << std::setw(39) << create_info.minImageCount << " |";
-	if (const char *format_string = vk_format_to_string(create_info.imageFormat); format_string != nullptr)
+
+	const char *format_string = nullptr;
+	switch (create_info.imageFormat)
+	{
+	case VK_FORMAT_UNDEFINED:
+		format_string = "VK_FORMAT_UNDEFINED";
+		break;
+	case VK_FORMAT_R8G8B8A8_UNORM:
+		format_string = "VK_FORMAT_R8G8B8A8_UNORM";
+		break;
+	case VK_FORMAT_R8G8B8A8_SRGB:
+		format_string = "VK_FORMAT_R8G8B8A8_SRGB";
+		break;
+	case VK_FORMAT_B8G8R8A8_UNORM:
+		format_string = "VK_FORMAT_B8G8R8A8_UNORM";
+		break;
+	case VK_FORMAT_B8G8R8A8_SRGB:
+		format_string = "VK_FORMAT_B8G8R8A8_SRGB";
+		break;
+	case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+		format_string = "VK_FORMAT_A2R10G10B10_UNORM_PACK32";
+		break;
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
+		format_string = "VK_FORMAT_R16G16B16A16_SFLOAT";
+		break;
+	}
+
+	if (format_string != nullptr)
 		LOG(INFO) << "  | imageFormat                             | " << std::setw(39) << format_string << " |";
 	else
 		LOG(INFO) << "  | imageFormat                             | " << std::setw(39) << create_info.imageFormat << " |";
+
 	LOG(INFO) << "  | imageColorSpace                         | " << std::setw(39) << create_info.imageColorSpace << " |";
 	LOG(INFO) << "  | imageExtent                             | " << std::setw(19) << create_info.imageExtent.width << ' ' << std::setw(19) << create_info.imageExtent.height << " |";
 	LOG(INFO) << "  | imageArrayLayers                        | " << std::setw(39) << create_info.imageArrayLayers << " |";
@@ -695,7 +707,7 @@ VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreat
 	}
 
 #if RESHADE_VERBOSE_LOG
-	LOG(INFO) << "Returning Vulkan swapchain " << *pSwapchain << '.';
+	LOG(INFO) << "Returning Vulkan swap chain " << *pSwapchain << '.';
 #endif
 	return result;
 }
@@ -783,7 +795,10 @@ VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPr
 	present_info.pWaitSemaphores = wait_semaphores.data();
 
 	GET_DISPATCH_PTR(QueuePresentKHR, queue);
-	return trampoline(queue, &present_info);
+	g_in_dxgi_runtime = true;
+	const VkResult result = trampoline(queue, &present_info);
+	g_in_dxgi_runtime = false;
+	return result;
 }
 
 VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize memoryOffset)
@@ -800,6 +815,12 @@ VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device, VkBuffer buffer, VkDevic
 		return result;
 	}
 
+#if RESHADE_ADDON
+	const auto buffer_data = device_impl->get_user_data_for_object<VK_OBJECT_TYPE_BUFFER>(buffer);
+	buffer_data->memory = memory;
+	buffer_data->memory_offset = memoryOffset;
+#endif
+
 	return result;
 }
 VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bindInfoCount, const VkBindBufferMemoryInfo *pBindInfos)
@@ -815,6 +836,15 @@ VkResult VKAPI_CALL vkBindBufferMemory2(VkDevice device, uint32_t bindInfoCount,
 #endif
 		return result;
 	}
+
+#if RESHADE_ADDON
+	for (uint32_t i = 0; i < bindInfoCount; ++i)
+	{
+		const auto buffer_data = device_impl->get_user_data_for_object<VK_OBJECT_TYPE_BUFFER>(pBindInfos[i].buffer);
+		buffer_data->memory = pBindInfos[i].memory;
+		buffer_data->memory_offset = pBindInfos[i].memoryOffset;
+	}
+#endif
 
 	return result;
 }
@@ -835,6 +865,10 @@ VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMe
 
 #if RESHADE_ADDON
 	create_default_view(device_impl, image);
+
+	const auto image_data = device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>(image);
+	image_data->memory = memory;
+	image_data->memory_offset = memoryOffset;
 #endif
 
 	return result;
@@ -855,7 +889,13 @@ VkResult VKAPI_CALL vkBindImageMemory2(VkDevice device, uint32_t bindInfoCount, 
 
 #if RESHADE_ADDON
 	for (uint32_t i = 0; i < bindInfoCount; ++i)
+	{
 		create_default_view(device_impl, pBindInfos[i].image);
+
+		const auto image_data = device_impl->get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>(pBindInfos[i].image);
+		image_data->memory = pBindInfos[i].memory;
+		image_data->memory_offset = pBindInfos[i].memoryOffset;
+	}
 #endif
 
 	return result;
@@ -1237,11 +1277,14 @@ VkResult VKAPI_CALL vkCreatePipelineLayout(VkDevice device, const VkPipelineLayo
 	}
 
 #if RESHADE_ADDON
+	const uint32_t set_desc_count = pCreateInfo->setLayoutCount;
+	const uint32_t total_desc_count = set_desc_count + pCreateInfo->pushConstantRangeCount;
+
 	reshade::vulkan::object_data<VK_OBJECT_TYPE_PIPELINE_LAYOUT> data;
-	data.desc.resize(pCreateInfo->setLayoutCount + pCreateInfo->pushConstantRangeCount);
+	data.desc.resize(total_desc_count);
 	data.num_sets = pCreateInfo->setLayoutCount;
 
-	for (uint32_t i = 0; i < pCreateInfo->setLayoutCount; ++i)
+	for (uint32_t i = 0; i < set_desc_count; ++i)
 	{
 		const bool push_descriptors = device_impl->get_user_data_for_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>(pCreateInfo->pSetLayouts[i])->push_descriptors;
 
@@ -1249,7 +1292,7 @@ VkResult VKAPI_CALL vkCreatePipelineLayout(VkDevice device, const VkPipelineLayo
 		data.desc[i].descriptor_layout = { (uint64_t)pCreateInfo->pSetLayouts[i] };
 	}
 
-	for (uint32_t i = pCreateInfo->setLayoutCount; i < pCreateInfo->setLayoutCount + pCreateInfo->pushConstantRangeCount; ++i)
+	for (uint32_t i = set_desc_count; i < total_desc_count; ++i)
 	{
 		const VkPushConstantRange &push_constant_range = pCreateInfo->pPushConstantRanges[i];
 
@@ -1343,43 +1386,48 @@ VkResult VKAPI_CALL vkCreateDescriptorSetLayout(VkDevice device, const VkDescrip
 	data.num_descriptors = 0;
 	data.push_descriptors = (pCreateInfo->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR) != 0;
 
-	std::vector<uint32_t> descriptor_counts_per_binding;
-	descriptor_counts_per_binding.reserve(pCreateInfo->bindingCount);
-
-	for (uint32_t i = 0; i < pCreateInfo->bindingCount; ++i)
+	if (pCreateInfo->bindingCount != 0)
 	{
-		const VkDescriptorSetLayoutBinding &binding = pCreateInfo->pBindings[i];
+		assert(pCreateInfo->pBindings != nullptr);
 
-		if (binding.binding >= descriptor_counts_per_binding.size())
-			descriptor_counts_per_binding.resize(binding.binding + 1);
-		descriptor_counts_per_binding[binding.binding] = binding.descriptorCount;
+		std::vector<uint32_t> descriptor_counts_per_binding;
+		descriptor_counts_per_binding.reserve(pCreateInfo->bindingCount);
 
-		data.desc[i].binding = binding.binding;
-		data.desc[i].dx_register_index = 0;
-		data.desc[i].dx_register_space = 0;
-		data.desc[i].count = binding.descriptorCount;
-		data.desc[i].array_size = binding.descriptorCount;
-		data.desc[i].type = reshade::vulkan::convert_descriptor_type(binding.descriptorType);
-		data.desc[i].visibility = static_cast<reshade::api::shader_stage>(binding.stageFlags);
-
-		data.num_descriptors += binding.descriptorCount;
-	}
-
-	for (size_t i = 1; i < descriptor_counts_per_binding.size(); ++i)
-		descriptor_counts_per_binding[i] += descriptor_counts_per_binding[i - 1];
-
-	data.binding_to_offset.reserve(descriptor_counts_per_binding.back());
-
-	for (uint32_t i = 0, offset = 0; i < pCreateInfo->bindingCount; ++i)
-	{
-		const uint32_t binding = data.desc[i].binding;
-		if (binding != 0)
+		for (uint32_t i = 0; i < pCreateInfo->bindingCount; ++i)
 		{
-			offset = descriptor_counts_per_binding[binding - 1];
-			data.desc[i].offset = offset;
+			const VkDescriptorSetLayoutBinding &binding = pCreateInfo->pBindings[i];
+
+			if (binding.binding >= descriptor_counts_per_binding.size())
+				descriptor_counts_per_binding.resize(binding.binding + 1);
+			descriptor_counts_per_binding[binding.binding] = binding.descriptorCount;
+
+			data.desc[i].binding = binding.binding;
+			data.desc[i].dx_register_index = 0;
+			data.desc[i].dx_register_space = 0;
+			data.desc[i].count = binding.descriptorCount;
+			data.desc[i].array_size = binding.descriptorCount;
+			data.desc[i].type = reshade::vulkan::convert_descriptor_type(binding.descriptorType);
+			data.desc[i].visibility = static_cast<reshade::api::shader_stage>(binding.stageFlags);
+
+			data.num_descriptors += binding.descriptorCount;
 		}
 
-		data.binding_to_offset[binding] = offset;
+		for (size_t i = 1; i < descriptor_counts_per_binding.size(); ++i)
+			descriptor_counts_per_binding[i] += descriptor_counts_per_binding[i - 1];
+
+		data.binding_to_offset.reserve(descriptor_counts_per_binding.back());
+
+		for (uint32_t i = 0, offset = 0; i < pCreateInfo->bindingCount; ++i)
+		{
+			const uint32_t binding = data.desc[i].binding;
+			if (binding != 0)
+			{
+				offset = descriptor_counts_per_binding[binding - 1];
+				data.desc[i].offset = offset;
+			}
+
+			data.binding_to_offset[binding] = offset;
+		}
 	}
 
 	device_impl->register_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>(*pSetLayout, std::move(data));

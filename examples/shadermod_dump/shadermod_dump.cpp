@@ -3,51 +3,34 @@
  * License: https://github.com/crosire/reshade#license
  */
 
-#include "reshade.hpp"
+#include <reshade.hpp>
 #include "crc32_hash.hpp"
 #include <fstream>
 #include <filesystem>
-
-#ifdef BUILTIN_ADDON
-#include "ini_file.hpp"
-#endif
 
 using namespace reshade::api;
 
 static void dump_shader_code(device_api device_type, pipeline_stage, const shader_desc &desc)
 {
-	bool dump_all = false;
+	uint32_t shader_hash = compute_crc32(static_cast<const uint8_t *>(desc.code), desc.code_size);
+
+	const wchar_t *extension = L".cso";
+	if (device_type == device_api::vulkan || (
+		device_type == device_api::opengl && desc.code_size > sizeof(uint32_t) && *static_cast<const uint32_t *>(desc.code) == 0x07230203 /* SPIR-V magic */))
+		extension = L".spv"; // Vulkan uses SPIR-V (and sometimes OpenGL does too)
+	else if (device_type == device_api::opengl)
+		extension = L".glsl"; // OpenGL otherwise uses plain text GLSL
+
+	char hash_string[11];
+	sprintf_s(hash_string, "0x%08x", shader_hash);
+
 	std::filesystem::path dump_path;
+	dump_path /= L"shader_";
+	dump_path += hash_string;
+	dump_path += extension;
 
-#ifdef BUILTIN_ADDON
-	ini_file &config = reshade::global_config();
-	config.get("SHADER", "DumpAll", dump_all);
-	config.get("SHADER", "DumpPath", dump_path);
-#else
-	dump_all = true;
-#endif
-
-	if (dump_all)
-	{
-		uint32_t shader_hash = compute_crc32(static_cast<const uint8_t *>(desc.code), desc.code_size);
-
-		const wchar_t *extension = L".cso";
-		if (device_type == device_api::vulkan || (
-			device_type == device_api::opengl && desc.code_size > sizeof(uint32_t) && *static_cast<const uint32_t *>(desc.code) == 0x07230203 /* SPIR-V magic */))
-			extension = L".spv"; // Vulkan uses SPIR-V (and sometimes OpenGL does too)
-		else if (device_type == device_api::opengl)
-			extension = L".glsl"; // OpenGL otherwise uses plain text GLSL
-
-		char hash_string[11];
-		sprintf_s(hash_string, "0x%08x", shader_hash);
-
-		dump_path /= L"shader_";
-		dump_path += hash_string;
-		dump_path += extension;
-
-		std::ofstream file(dump_path, std::ios::binary);
-		file.write(static_cast<const char *>(desc.code), desc.code_size);
-	}
+	std::ofstream file(dump_path, std::ios::binary);
+	file.write(static_cast<const char *>(desc.code), desc.code_size);
 }
 
 static bool on_create_pipeline(device *device, pipeline_desc &desc)

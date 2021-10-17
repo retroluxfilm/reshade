@@ -207,7 +207,10 @@ ULONG   STDMETHODCALLTYPE D3D11DeviceContext::Release()
 
 	const ULONG ref = InterlockedDecrement(&_ref);
 	if (ref != 0)
-		return _orig->Release(), ref;
+	{
+		_orig->Release();
+		return ref;
+	}
 
 	const auto orig = _orig;
 	const auto interface_version = _interface_version;
@@ -296,10 +299,66 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::Draw(UINT VertexCount, UINT StartV
 }
 HRESULT STDMETHODCALLTYPE D3D11DeviceContext::Map(ID3D11Resource *pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE *pMappedResource)
 {
-	return _orig->Map(pResource, Subresource, MapType, MapFlags, pMappedResource);
+	const HRESULT hr = _orig->Map(pResource, Subresource, MapType, MapFlags, pMappedResource);
+#if RESHADE_ADDON
+	if (SUCCEEDED(hr) && (
+		reshade::has_addon_event<reshade::addon_event::map_buffer_region>() ||
+		reshade::has_addon_event<reshade::addon_event::map_texture_region>()))
+	{
+		assert(pResource != nullptr);
+
+		D3D11_RESOURCE_DIMENSION type = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+		pResource->GetType(&type);
+		if (type == D3D11_RESOURCE_DIMENSION_BUFFER)
+		{
+			assert(Subresource == 0);
+
+			reshade::invoke_addon_event<reshade::addon_event::map_buffer_region>(
+				_device,
+				reshade::api::resource { reinterpret_cast<uintptr_t>(pResource) },
+				0,
+				std::numeric_limits<uint64_t>::max(),
+				reshade::d3d11::convert_access_flags(MapType),
+				pMappedResource != nullptr ? &pMappedResource->pData : nullptr);
+		}
+		else
+		{
+			reshade::invoke_addon_event<reshade::addon_event::map_texture_region>(
+				_device,
+				reshade::api::resource { reinterpret_cast<uintptr_t>(pResource) },
+				Subresource,
+				nullptr,
+				reshade::d3d11::convert_access_flags(MapType),
+				reinterpret_cast<reshade::api::subresource_data *>(pMappedResource));
+		}
+	}
+#endif
+
+	return hr;
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::Unmap(ID3D11Resource *pResource, UINT Subresource)
 {
+#if RESHADE_ADDON
+	assert(pResource != nullptr);
+
+	if (reshade::has_addon_event<reshade::addon_event::unmap_buffer_region>() ||
+		reshade::has_addon_event<reshade::addon_event::unmap_texture_region>())
+	{
+		D3D11_RESOURCE_DIMENSION type = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+		pResource->GetType(&type);
+		if (type == D3D11_RESOURCE_DIMENSION_BUFFER)
+		{
+			assert(Subresource == 0);
+
+			reshade::invoke_addon_event<reshade::addon_event::unmap_buffer_region>(_device, reshade::api::resource { reinterpret_cast<uintptr_t>(pResource) });
+		}
+		else
+		{
+			reshade::invoke_addon_event<reshade::addon_event::unmap_texture_region>(_device, reshade::api::resource { reinterpret_cast<uintptr_t>(pResource) }, Subresource);
+		}
+	}
+#endif
+
 	_orig->Unmap(pResource, Subresource);
 }
 void    STDMETHODCALLTYPE D3D11DeviceContext::PSSetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppConstantBuffers)
@@ -569,8 +628,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::RSSetScissorRects(UINT NumRects, c
 	_orig->RSSetScissorRects(NumRects, pRects);
 
 #if RESHADE_ADDON
-	static_assert(sizeof(D3D11_RECT) == (sizeof(int32_t) * 4));
-
 	reshade::invoke_addon_event<reshade::addon_event::bind_scissor_rects>(this, 0, NumRects, reinterpret_cast<const int32_t *>(pRects));
 #endif
 }
@@ -584,7 +641,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::CopySubresourceRegion(ID3D11Resour
 	{
 		D3D11_RESOURCE_DIMENSION type = D3D11_RESOURCE_DIMENSION_UNKNOWN;
 		pDstResource->GetType(&type);
-
 		if (type == D3D11_RESOURCE_DIMENSION_BUFFER)
 		{
 			assert(SrcSubresource == 0 && DstSubresource == 0);
@@ -608,8 +664,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::CopySubresourceRegion(ID3D11Resour
 				// TODO: Destination box size is not implemented (would have to get it from the resource)
 				assert(DstX == 0 && DstY == 0 && DstZ == 0);
 			}
-
-			static_assert(sizeof(D3D11_BOX) == (sizeof(int32_t) * 6));
 
 			if (reshade::invoke_addon_event<reshade::addon_event::copy_texture_region>(this,
 				reshade::api::resource { reinterpret_cast<uintptr_t>(pSrcResource) }, SrcSubresource, reinterpret_cast<const int32_t *>(pSrcBox),
@@ -639,7 +693,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::UpdateSubresource(ID3D11Resource *
 	{
 		D3D11_RESOURCE_DIMENSION type = D3D11_RESOURCE_DIMENSION_UNKNOWN;
 		pDstResource->GetType(&type);
-
 		if (type == D3D11_RESOURCE_DIMENSION_BUFFER)
 		{
 			assert(DstSubresource == 0);
@@ -653,8 +706,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::UpdateSubresource(ID3D11Resource *
 		}
 		else
 		{
-			static_assert(sizeof(D3D11_BOX) == (sizeof(int32_t) * 6));
-
 			if (reshade::invoke_addon_event<reshade::addon_event::update_texture_region>(_device,
 				reshade::api::subresource_data { const_cast<void *>(pSrcData), SrcRowPitch, SrcDepthPitch },
 				reshade::api::resource { reinterpret_cast<uintptr_t>(pDstResource) }, DstSubresource, reinterpret_cast<const int32_t *>(pDstBox)))
@@ -1052,7 +1103,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::CopySubresourceRegion1(ID3D11Resou
 	{
 		D3D11_RESOURCE_DIMENSION type;
 		pDstResource->GetType(&type);
-
 		if (type == D3D11_RESOURCE_DIMENSION_BUFFER)
 		{
 			assert(SrcSubresource == 0 && DstSubresource == 0);
@@ -1076,8 +1126,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::CopySubresourceRegion1(ID3D11Resou
 				// TODO: Destination box size is not implemented (would have to get it from the resource)
 				assert(DstX == 0 && DstY == 0 && DstZ == 0);
 			}
-
-			static_assert(sizeof(D3D11_BOX) == (sizeof(int32_t) * 6));
 
 			if (reshade::invoke_addon_event<reshade::addon_event::copy_texture_region>(this,
 				reshade::api::resource { reinterpret_cast<uintptr_t>(pSrcResource) }, SrcSubresource, reinterpret_cast<const int32_t *>(pSrcBox),
@@ -1113,8 +1161,6 @@ void    STDMETHODCALLTYPE D3D11DeviceContext::UpdateSubresource1(ID3D11Resource 
 		}
 		else
 		{
-			static_assert(sizeof(D3D11_BOX) == (sizeof(int32_t) * 6));
-
 			if (reshade::invoke_addon_event<reshade::addon_event::update_texture_region>(_device,
 				reshade::api::subresource_data { const_cast<void *>(pSrcData), SrcRowPitch, SrcDepthPitch },
 				reshade::api::resource { reinterpret_cast<uintptr_t>(pDstResource) }, DstSubresource, reinterpret_cast<const int32_t *>(pDstBox)))

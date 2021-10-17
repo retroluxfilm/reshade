@@ -150,8 +150,9 @@ namespace reshade { namespace api
 	/// The base class for objects provided by the ReShade API.
 	/// <para>This lets you store and retrieve custom data with objects, e.g. to be able to communicate persistent information between event callbacks.</para>
 	/// </summary>
-	struct __declspec(novtable) api_object
+	class __declspec(novtable) api_object
 	{
+	public:
 		/// <summary>
 		/// Gets a custom data pointer from the object that was previously set via <see cref="set_user_data"/>.
 		/// </summary>
@@ -207,8 +208,9 @@ namespace reshade { namespace api
 	/// <remarks>
 	/// This class is safe to use concurrently from multiple threads in D3D10+ and Vulkan (with the exception of <see cref="device::wait_idle"/>).
 	/// </remarks>
-	struct __declspec(novtable) device : public api_object
+	class __declspec(novtable) device : public api_object
 	{
+	public:
 		/// <summary>
 		/// Gets the underlying render API used by this device.
 		/// </summary>
@@ -355,37 +357,53 @@ namespace reshade { namespace api
 		virtual void destroy_descriptor_sets(uint32_t count, const descriptor_set *sets) = 0;
 
 		/// <summary>
-		/// Maps the memory of a resource into application address space.
+		/// Maps the memory of a buffer resource into application address space.
 		/// </summary>
-		/// <param name="resource">Resource to map to host memory.</param>
-		/// <param name="subresource">Index of the subresource to map (<c>level + (layer * levels)</c>).</param>
+		/// <param name="resource">Buffer resource to map to host memory.</param>
+		/// <param name="offset">Offset (in bytes) into the buffer resource to start mapping.</param>
+		/// <param name="size">Number of bytes to map. Set to -1 (0xFFFFFFFFFFFFFFFF) to indicate that the entire buffer should be mapped.</param>
 		/// <param name="access">A hint on how the returned data pointer will be accessed.</param>
-		/// <param name="out_data">Pointer to a variable that is set to a pointer to the memory of the resource and optionally the row and slice pitch of that data (depending on the resource type).</param>
-		/// <returns><see langword="true"/> if the memory of the resource was successfully mapped, <see langword="false"/> otherwise (in this case <paramref name="out_data"/> is set to <c>nullptr</c>).</returns>
-		virtual bool map_resource(resource resource, uint32_t subresource, map_access access, subresource_data *out_data) = 0;
+		/// <param name="out_data">Pointer to a variable that is set to a pointer to the memory of the buffer resource.</param>
+		/// <returns><see langword="true"/> if the memory of the buffer resource was successfully mapped, <see langword="false"/> otherwise (in this case <paramref name="out_data"/> is set to <c>nullptr</c>).</returns>
+		virtual bool map_buffer_region(resource resource, uint64_t offset, uint64_t size, map_access access, void **out_data) = 0;
 		/// <summary>
-		/// Unmaps a previously mapped resource.
+		/// Unmaps a previously mapped buffer resource.
 		/// </summary>
-		/// <param name="resource">Resource to unmap from host memory.</param>
+		/// <param name="resource">Buffer resource to unmap from host memory.</param>
+		virtual void unmap_buffer_region(resource resource) = 0;
+		/// <summary>
+		/// Maps the memory of a texture resource into application address space.
+		/// </summary>
+		/// <param name="resource">Texture resource to map to host memory.</param>
+		/// <param name="subresource">Index of the subresource to map (<c>level + (layer * levels)</c>).</param>
+		/// <param name="box">An optional 3D box (or <c>nullptr</c> to reference the entire subresource) that defines the region in the <paramref name="resource"/> to map, in the format { left, top, front, right, bottom, back }.</param>
+		/// <param name="access">A hint on how the returned data pointer will be accessed.</param>
+		/// <param name="out_data">Pointer to a variable that is set to a pointer to the memory of the texture resource and optionally the row and slice pitch of that data (depending on the resource type).</param>
+		/// <returns><see langword="true"/> if the memory of the texture resource was successfully mapped, <see langword="false"/> otherwise (in this case <paramref name="out_data"/> is set to <c>nullptr</c>).</returns>
+		virtual bool map_texture_region(resource resource, uint32_t subresource, const int32_t box[6], map_access access, subresource_data *out_data) = 0;
+		/// <summary>
+		/// Unmaps a previously mapped texture resource.
+		/// </summary>
+		/// <param name="resource">Texture resource to unmap from host memory.</param>
 		/// <param name="subresource">Index of the subresource to unmap (<c>level + (layer * levels)</c>).</param>
-		virtual void unmap_resource(resource resource, uint32_t subresource) = 0;
+		virtual void unmap_texture_region(resource resource, uint32_t subresource) = 0;
 
 		/// <summary>
 		/// Uploads data to a buffer resource.
 		/// </summary>
 		/// <param name="data">Pointer to the data to upload.</param>
-		/// <param name="dest">Buffer resource to upload to.</param>
-		/// <param name="dest_offset">Offset (in bytes) into the buffer resource to start uploading to.</param>
+		/// <param name="resource">Buffer resource to upload to.</param>
+		/// <param name="offset">Offset (in bytes) into the buffer resource to start uploading to.</param>
 		/// <param name="size">Number of bytes to upload.</param>
-		virtual void update_buffer_region(const void *data, resource dest, uint64_t dest_offset, uint64_t size) = 0;
+		virtual void update_buffer_region(const void *data, resource resource, uint64_t offset, uint64_t size) = 0;
 		/// <summary>
 		/// Uploads data to a texture resource.
 		/// </summary>
 		/// <param name="data">Pointer to the data to upload.</param>
-		/// <param name="dest">Texture resource to upload to.</param>
-		/// <param name="dest_subresource">Index of the subresource to upload to (<c>level + (layer * levels)</c>).</param>
-		/// <param name="dest_box">A 3D box (or <c>nullptr</c> to reference the entire subresource) that defines the region in the <paramref name="resource"/> to upload to, in the format { left, top, front, right, bottom, back }.</param>
-		virtual void update_texture_region(const subresource_data &data, resource dest, uint32_t dest_subresource, const int32_t dest_box[6] = nullptr) = 0;
+		/// <param name="resource">Texture resource to upload to.</param>
+		/// <param name="subresource">Index of the subresource to upload to (<c>level + (layer * levels)</c>).</param>
+		/// <param name="box">An optional 3D box (or <c>nullptr</c> to reference the entire subresource) that defines the region in the <paramref name="resource"/> to upload to, in the format { left, top, front, right, bottom, back }.</param>
+		virtual void update_texture_region(const subresource_data &data, resource resource, uint32_t subresource, const int32_t box[6] = nullptr) = 0;
 
 		/// <summary>
 		/// Updates the contents of descriptor sets with the specified descriptors.
@@ -467,8 +485,9 @@ namespace reshade { namespace api
 	/// <summary>
 	/// The base class for objects that are children to a logical render <see cref="device"/>.
 	/// </summary>
-	struct __declspec(novtable) device_object : public api_object
+	class __declspec(novtable) device_object : public api_object
 	{
+	public:
 		/// <summary>
 		/// Gets the parent device for this object.
 		/// </summary>
@@ -482,8 +501,9 @@ namespace reshade { namespace api
 	/// <remarks>
 	/// This class may NOT be used concurrently from multiple threads!
 	/// </remarks>
-	struct __declspec(novtable) command_list : public device_object
+	class __declspec(novtable) command_list : public device_object
 	{
+	public:
 		/// <summary>
 		/// Adds a barrier for the specified <paramref name="resource"/> to the command stream.
 		/// When both <paramref name="old_state"/> and <paramref name="new_state"/> are <see cref="resource_usage::unordered_access"/> a UAV barrier is added, otherwise a state transition is performed.
@@ -679,7 +699,7 @@ namespace reshade { namespace api
 		/// <param name="dest">Buffer resource to copy to.</param>
 		/// <param name="dest_offset">Offset (in bytes) into the <paramref name="dest"/> buffer to start copying to.</param>
 		/// <param name="size">Number of bytes to copy.</param>
-		virtual void copy_buffer_region(resource src, uint64_t source_offset, resource dest, uint64_t dest_offset, uint64_t size) = 0;
+		virtual void copy_buffer_region(resource source, uint64_t source_offset, resource dest, uint64_t dest_offset, uint64_t size) = 0;
 		/// <summary>
 		/// Copies a texture region from the <paramref name="source"/> buffer to the <paramref name="dest"/> texture.
 		/// <para>The <paramref name="source"/> resource has to be in the <see cref="resource_usage::copy_source"/> state.</para>
@@ -835,8 +855,9 @@ namespace reshade { namespace api
 	/// <remarks>
 	/// This class may NOT be used concurrently from multiple threads!
 	/// </remarks>
-	struct __declspec(novtable) command_queue : public device_object
+	class __declspec(novtable) command_queue : public device_object
 	{
+	public:
 		/// <summary>
 		/// Gets a special command list, on which all issued commands are executed as soon as possible (or right before the application executes its next command list on this queue).
 		/// </summary>
@@ -879,8 +900,9 @@ namespace reshade { namespace api
 	/// A swap chain, used to present images to the screen.
 	/// <para>Functionally equivalent to a 'IDirect3DSwapChain9', 'IDXGISwapChain', 'HDC' or 'VkSwapchainKHR'.</para>
 	/// </summary>
-	struct __declspec(novtable) swapchain : public device_object
+	class __declspec(novtable) swapchain : public device_object
 	{
+	public:
 		/// <summary>
 		/// Gets the back buffer resource at the specified <paramref name="index"/> in this swap chain.
 		/// </summary>
@@ -903,7 +925,7 @@ namespace reshade { namespace api
 		/// <summary>
 		/// Gets the effect runtime associated with this swap chain.
 		/// </summary>
-		inline  struct effect_runtime *get_effect_runtime() { return reinterpret_cast<effect_runtime *>(this); }
+		inline  class effect_runtime *get_effect_runtime() { return reinterpret_cast<effect_runtime *>(this); }
 	};
 
 	/// <summary>
@@ -919,8 +941,9 @@ namespace reshade { namespace api
 	/// A ReShade effect runtime, used to control effects.
 	/// <para>A separate runtime is instantiated for every swap chain.</para>
 	/// </summary>
-	struct __declspec(novtable) effect_runtime : public swapchain
+	class __declspec(novtable) effect_runtime : public swapchain
 	{
+	public:
 		/// <summary>
 		/// Gets the main graphics command queue associated with this effect runtime.
 		/// This may potentially be different from the presentation queue and should be used to execute graphics commands on.
@@ -928,7 +951,7 @@ namespace reshade { namespace api
 		virtual command_queue *get_command_queue() = 0;
 
 		/// <summary>
-		/// Applies post-processing effects to the specified render target and prevents the usual rendering of effects before swap chain presentation of the current frame.
+		/// Applies post-processing effects to the specified render targets and prevents the usual rendering of effects before swap chain presentation of the current frame.
 		/// This can be used to force ReShade to render effects at a certain point during the frame to e.g. avoid effects being applied to user interface elements of the application.
 		/// <para>The resource the <paramref name="rtv"/> view points to has to be in the <see cref="resource_usage::render_target"/> state.</para>
 		/// </summary>

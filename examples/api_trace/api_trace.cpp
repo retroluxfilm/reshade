@@ -4,15 +4,13 @@
  */
 
 #include <imgui.h>
-#include "reshade.hpp"
+#include <reshade.hpp>
 #include <mutex>
 #include <sstream>
 #include <unordered_set>
 #include <cassert>
 
-#ifndef BUILTIN_ADDON
 imgui_function_table g_imgui_function_table;
-#endif
 
 namespace
 {
@@ -534,7 +532,7 @@ static void on_bind_vertex_buffers(reshade::api::command_list *, uint32_t first,
 
 	std::stringstream s;
 	for (uint32_t i = 0; i < count; ++i)
-		s << "bind_vertex_buffer(" << (first + i) << ", " << (void *)buffers[i].handle << ", " << offsets[i] << ", " << strides[i] << ")";
+		s << "bind_vertex_buffer(" << (first + i) << ", " << (void *)buffers[i].handle << ", " << (offsets != nullptr ? offsets[i] : 0) << ", " << (strides != nullptr ? strides[i] : 0) << ")";
 	const std::lock_guard<std::mutex> lock(s_mutex); s_capture_log.push_back(s.str());
 }
 
@@ -803,21 +801,10 @@ static void draw_overlay(reshade::api::effect_runtime *, void *)
 		{
 			if (ImGui::BeginChild("log", ImVec2(0, 0), true, ImGuiWindowFlags_AlwaysHorizontalScrollbar))
 			{
-#ifdef BUILTIN_ADDON
-				ImGuiListClipper clipper;
-				clipper.Begin(static_cast<int>(s_capture_log.size()), ImGui::GetTextLineHeightWithSpacing());
-				while (clipper.Step())
+				for (size_t i = 0; i < s_capture_log.size(); ++i)
 				{
-					for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
-#else
-					for (size_t i = 0; i < s_capture_log.size(); ++i)
-#endif
-					{
-						ImGui::TextUnformatted(s_capture_log[i].c_str(), s_capture_log[i].c_str() + s_capture_log[i].size());
-					}
-#ifdef BUILTIN_ADDON
+					ImGui::TextUnformatted(s_capture_log[i].c_str(), s_capture_log[i].c_str() + s_capture_log[i].size());
 				}
-#endif
 			} ImGui::EndChild();
 		}
 	}
