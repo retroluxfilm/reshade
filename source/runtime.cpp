@@ -148,7 +148,7 @@ bool reshade::runtime::on_init(input::window_handle window)
 {
 	assert(!_is_initialized);
 
-	// Create an empty texture, which is bound to shader resource view slots with an unknown semantic (since it is not valid to bind a zero handle in Vulkan)
+	// Create an empty texture, which is bound to shader resource view slots with an unknown semantic (since it is not valid to bind a zero handle in Vulkan, unless the 'VK_EXT_robustness2' extension is enabled)
 	if (_empty_tex == 0)
 	{
 		// Use VK_FORMAT_R16_SFLOAT format, since it is mandatory according to the spec (see https://www.khronos.org/registry/vulkan/specs/1.1/html/vkspec.html#features-required-format-support)
@@ -1942,7 +1942,7 @@ bool reshade::runtime::create_effect(size_t effect_index)
 					desc.compute.shader.spec_constant_values = spec_data.data();
 				}
 
-				if (!_device->create_pipeline(desc, &pass_data.pipeline))
+				if (!_device->create_pipeline(desc, 0, nullptr, &pass_data.pipeline))
 				{
 					effect.compiled = false;
 					_last_reload_successfull = false;
@@ -2052,7 +2052,7 @@ bool reshade::runtime::create_effect(size_t effect_index)
 					default:
 					case reshadefx::pass_blend_op::add: return api::blend_op::add;
 					case reshadefx::pass_blend_op::subtract: return api::blend_op::subtract;
-					case reshadefx::pass_blend_op::rev_subtract: return api::blend_op::rev_subtract;
+					case reshadefx::pass_blend_op::rev_subtract: return api::blend_op::reverse_subtract;
 					case reshadefx::pass_blend_op::min: return api::blend_op::min;
 					case reshadefx::pass_blend_op::max: return api::blend_op::max;
 					}
@@ -2062,14 +2062,14 @@ bool reshade::runtime::create_effect(size_t effect_index)
 					case reshadefx::pass_blend_func::zero: return api::blend_factor::zero;
 					default:
 					case reshadefx::pass_blend_func::one: return api::blend_factor::one;
-					case reshadefx::pass_blend_func::src_color: return api::blend_factor::src_color;
-					case reshadefx::pass_blend_func::src_alpha: return api::blend_factor::src_alpha;
-					case reshadefx::pass_blend_func::inv_src_color: return api::blend_factor::inv_src_color;
-					case reshadefx::pass_blend_func::inv_src_alpha: return api::blend_factor::inv_src_alpha;
-					case reshadefx::pass_blend_func::dst_color: return api::blend_factor::dst_color;
-					case reshadefx::pass_blend_func::dst_alpha: return api::blend_factor::dst_alpha;
-					case reshadefx::pass_blend_func::inv_dst_color: return api::blend_factor::inv_dst_color;
-					case reshadefx::pass_blend_func::inv_dst_alpha: return api::blend_factor::inv_dst_alpha;
+					case reshadefx::pass_blend_func::src_color: return api::blend_factor::source_color;
+					case reshadefx::pass_blend_func::src_alpha: return api::blend_factor::source_alpha;
+					case reshadefx::pass_blend_func::inv_src_color: return api::blend_factor::one_minus_source_color;
+					case reshadefx::pass_blend_func::inv_src_alpha: return api::blend_factor::one_minus_source_alpha;
+					case reshadefx::pass_blend_func::dst_color: return api::blend_factor::dest_color;
+					case reshadefx::pass_blend_func::dst_alpha: return api::blend_factor::dest_alpha;
+					case reshadefx::pass_blend_func::inv_dst_color: return api::blend_factor::one_minus_dest_color;
+					case reshadefx::pass_blend_func::inv_dst_alpha: return api::blend_factor::one_minus_dest_alpha;
 					}
 				};
 
@@ -2077,11 +2077,11 @@ bool reshade::runtime::create_effect(size_t effect_index)
 				for (int i = 0; i < 8; ++i)
 				{
 					blend_state.blend_enable[i] = pass_info.blend_enable;
-					blend_state.src_color_blend_factor[i] = convert_blend_func(pass_info.src_blend);
-					blend_state.dst_color_blend_factor[i] = convert_blend_func(pass_info.dest_blend);
+					blend_state.source_color_blend_factor[i] = convert_blend_func(pass_info.src_blend);
+					blend_state.dest_color_blend_factor[i] = convert_blend_func(pass_info.dest_blend);
 					blend_state.color_blend_op[i] = convert_blend_op(pass_info.blend_op);
-					blend_state.src_alpha_blend_factor[i] = convert_blend_func(pass_info.src_blend_alpha);
-					blend_state.dst_alpha_blend_factor[i] = convert_blend_func(pass_info.dest_blend_alpha);
+					blend_state.source_alpha_blend_factor[i] = convert_blend_func(pass_info.src_blend_alpha);
+					blend_state.dest_alpha_blend_factor[i] = convert_blend_func(pass_info.dest_blend_alpha);
 					blend_state.alpha_blend_op[i] = convert_blend_op(pass_info.blend_op_alpha);
 					blend_state.render_target_write_mask[i] = pass_info.color_write_mask;
 				}
@@ -2098,10 +2098,10 @@ bool reshade::runtime::create_effect(size_t effect_index)
 					case reshadefx::pass_stencil_op::keep: return api::stencil_op::keep;
 					case reshadefx::pass_stencil_op::invert: return api::stencil_op::invert;
 					case reshadefx::pass_stencil_op::replace: return api::stencil_op::replace;
-					case reshadefx::pass_stencil_op::incr: return api::stencil_op::incr;
-					case reshadefx::pass_stencil_op::incr_sat: return api::stencil_op::incr_sat;
-					case reshadefx::pass_stencil_op::decr: return api::stencil_op::decr;
-					case reshadefx::pass_stencil_op::decr_sat: return api::stencil_op::decr_sat;
+					case reshadefx::pass_stencil_op::incr: return api::stencil_op::increment;
+					case reshadefx::pass_stencil_op::incr_sat: return api::stencil_op::increment_saturate;
+					case reshadefx::pass_stencil_op::decr: return api::stencil_op::decrement;
+					case reshadefx::pass_stencil_op::decr_sat: return api::stencil_op::decrement_saturate;
 					}
 				};
 				const auto convert_stencil_func = [](reshadefx::pass_stencil_func value) {
@@ -2135,7 +2135,7 @@ bool reshade::runtime::create_effect(size_t effect_index)
 				depth_stencil_state.front_stencil_pass_op = depth_stencil_state.back_stencil_pass_op;
 				depth_stencil_state.front_stencil_func = depth_stencil_state.back_stencil_func;
 
-				if (!_device->create_pipeline(desc, &pass_data.pipeline))
+				if (!_device->create_pipeline(desc, 0, nullptr, &pass_data.pipeline))
 				{
 					effect.compiled = false;
 					_last_reload_successfull = false;
@@ -2291,15 +2291,12 @@ void reshade::runtime::destroy_effect(size_t effect_index)
 		if (tech.effect_index != effect_index)
 			continue;
 
-		size_t pass_index = 0;
-
 		for (const technique::pass_data &pass : tech.passes_data)
 		{
 			_device->destroy_framebuffer(pass.fbo);
 			_device->destroy_render_pass(pass.pass);
 
-			const bool is_compute_pass = !tech.passes[pass_index++].cs_entry_point.empty();
-			_device->destroy_pipeline(is_compute_pass ? api::pipeline_stage::all_compute : api::pipeline_stage::all_graphics, pass.pipeline);
+			_device->destroy_pipeline(pass.pipeline);
 
 			_device->destroy_descriptor_sets(1, &pass.texture_set);
 			_device->destroy_descriptor_sets(1, &pass.storage_set);
@@ -3501,7 +3498,7 @@ void reshade::runtime::enumerate_uniform_variables(const char *effect_name, void
 	}
 }
 
-reshade::api::effect_uniform_variable reshade::runtime::get_uniform_variable(const char *effect_name, const char *variable_name) const
+reshade::api::effect_uniform_variable reshade::runtime::find_uniform_variable(const char *effect_name, const char *variable_name) const
 {
 	if (is_loading())
 		return { 0 };
@@ -3524,13 +3521,19 @@ reshade::api::effect_uniform_variable reshade::runtime::get_uniform_variable(con
 	return { 0 };
 }
 
-void reshade::runtime::get_uniform_binding(api::effect_uniform_variable variable, api::resource *out_buffer, uint64_t *out_offset) const
+auto reshade::runtime::get_uniform_name(api::effect_uniform_variable variable) const -> const char *
+{
+	if (variable == 0)
+		return nullptr;
+
+	return reinterpret_cast<const uniform *>(variable.handle)->name.c_str();
+}
+
+void reshade::runtime::get_uniform_binding(api::effect_uniform_variable variable, uint32_t *out_offset) const
 {
 	if (variable == 0)
 		return;
 
-	if (out_buffer != nullptr)
-		*out_buffer = _effects[reinterpret_cast<const uniform *>(variable.handle)->effect_index].cb;
 	if (out_offset != nullptr)
 		*out_offset = reinterpret_cast<const uniform *>(variable.handle)->offset;
 }
@@ -3567,14 +3570,7 @@ void reshade::runtime::get_uniform_annotation(api::effect_uniform_variable varia
 	for (size_t i = 0; i < count; ++i)
 		values[i] = reinterpret_cast<const uniform *>(variable.handle)->annotation_as_uint(name, array_index + i);
 }
-const char *reshade::runtime::get_uniform_name(api::effect_uniform_variable variable) const
-{
-	if (variable == 0)
-		return nullptr;
-
-	return reinterpret_cast<const uniform *>(variable.handle)->name.c_str();
-}
-const char *reshade::runtime::get_uniform_annotation(api::effect_uniform_variable variable, const char *name) const
+auto reshade::runtime::get_uniform_annotation(api::effect_uniform_variable variable, const char *name) const -> const char *
 {
 	if (variable == 0)
 		return nullptr;
@@ -3823,7 +3819,7 @@ void reshade::runtime::enumerate_texture_variables(const char *effect_name, void
 	}
 }
 
-reshade::api::effect_texture_variable reshade::runtime::get_texture_variable(const char *effect_name, const char *variable_name) const
+reshade::api::effect_texture_variable reshade::runtime::find_texture_variable(const char *effect_name, const char *variable_name) const
 {
 	if (is_loading())
 		return { 0 };
@@ -3838,6 +3834,14 @@ reshade::api::effect_texture_variable reshade::runtime::get_texture_variable(con
 	}
 
 	return { 0 };
+}
+
+auto reshade::runtime::get_texture_name(api::effect_texture_variable variable) const -> const char *
+{
+	if (variable == 0)
+		return nullptr;
+
+	return reinterpret_cast<const texture *>(variable.handle)->unique_name.c_str();
 }
 
 void reshade::runtime::get_texture_binding(api::effect_texture_variable variable, api::resource_view *out_srv, api::resource_view *out_srv_srgb) const
@@ -3883,14 +3887,7 @@ void reshade::runtime::get_texture_annotation(api::effect_texture_variable varia
 	for (size_t i = 0; i < count; ++i)
 		values[i] = reinterpret_cast<const texture *>(variable.handle)->annotation_as_uint(name, array_index + i);
 }
-const char *reshade::runtime::get_texture_name(api::effect_texture_variable variable) const
-{
-	if (variable == 0)
-		return nullptr;
-
-	return reinterpret_cast<const texture *>(variable.handle)->unique_name.c_str();
-}
-const char *reshade::runtime::get_texture_annotation(api::effect_texture_variable variable, const char *name) const
+auto reshade::runtime::get_texture_annotation(api::effect_texture_variable variable, const char *name) const -> const char *
 {
 	if (variable == 0)
 		return nullptr;

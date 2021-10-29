@@ -36,42 +36,11 @@ reshade::d3d10::device_impl::device_impl(ID3D10Device1 *device) :
 	invoke_addon_event<addon_event::init_device>(this);
 	invoke_addon_event<addon_event::init_command_list>(this);
 	invoke_addon_event<addon_event::init_command_queue>(this);
-
-	// Create global pipeline layout that is used for all application descriptor events
-	api::descriptor_range push_descriptors = {};
-	push_descriptors.array_size = 1;
-	api::pipeline_layout_param layout_params[3] = {};
-
-	push_descriptors.type = api::descriptor_type::sampler;
-	push_descriptors.count = D3D10_COMMONSHADER_SAMPLER_SLOT_COUNT;
-	push_descriptors.visibility = api::shader_stage::all;
-	layout_params[0].type = api::pipeline_layout_param_type::push_descriptors;
-	create_descriptor_set_layout(1, &push_descriptors, true, &layout_params[0].descriptor_layout);
-	push_descriptors.type = api::descriptor_type::shader_resource_view;
-	push_descriptors.count = D3D10_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
-	push_descriptors.visibility = api::shader_stage::all;
-	layout_params[1].type = api::pipeline_layout_param_type::push_descriptors;
-	create_descriptor_set_layout(1, &push_descriptors, true, &layout_params[1].descriptor_layout);
-	push_descriptors.type = api::descriptor_type::constant_buffer;
-	push_descriptors.count = D3D10_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
-	push_descriptors.visibility = api::shader_stage::all;
-	layout_params[2].type = api::pipeline_layout_param_type::push_descriptors;
-	create_descriptor_set_layout(1, &push_descriptors, true, &layout_params[2].descriptor_layout);
-
-	create_pipeline_layout(3, layout_params, &_global_pipeline_layout);
 #endif
 }
 reshade::d3d10::device_impl::~device_impl()
 {
 #if RESHADE_ADDON
-	const std::vector<api::pipeline_layout_param> &layout_params = reinterpret_cast<pipeline_layout_impl *>(_global_pipeline_layout.handle)->params;
-
-	destroy_descriptor_set_layout(layout_params[0].descriptor_layout);
-	destroy_descriptor_set_layout(layout_params[1].descriptor_layout);
-	destroy_descriptor_set_layout(layout_params[2].descriptor_layout);
-
-	destroy_pipeline_layout(_global_pipeline_layout);
-
 	invoke_addon_event<addon_event::destroy_command_queue>(this);
 	invoke_addon_event<addon_event::destroy_command_list>(this);
 
@@ -96,9 +65,12 @@ bool reshade::d3d10::device_impl::check_capability(api::device_caps capability) 
 	case api::device_caps::hull_and_domain_shader:
 	case api::device_caps::logic_op:
 		return false;
-	case api::device_caps::dual_src_blend:
+	case api::device_caps::dual_source_blend:
 	case api::device_caps::independent_blend: // Supported in D3D10.1
 	case api::device_caps::fill_mode_non_solid:
+		return true;
+	case api::device_caps::conservative_rasterization:
+		return false;
 	case api::device_caps::bind_render_targets_and_depth_stencil:
 	case api::device_caps::multi_viewport:
 		return true;
@@ -302,8 +274,17 @@ void reshade::d3d10::device_impl::destroy_resource_view(api::resource_view handl
 		reinterpret_cast<IUnknown *>(handle.handle)->Release();
 }
 
-bool reshade::d3d10::device_impl::create_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
+bool reshade::d3d10::device_impl::create_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle)
 {
+	for (uint32_t i = 0; i < dynamic_state_count; ++i)
+	{
+		if (dynamic_states[i] != api::dynamic_state::primitive_topology)
+		{
+			*out_handle = { 0 };
+			return false;
+		}
+	}
+
 	switch (desc.type)
 	{
 	case api::pipeline_stage::all_graphics:
@@ -331,9 +312,9 @@ bool reshade::d3d10::device_impl::create_graphics_pipeline(const api::pipeline_d
 {
 	if (desc.graphics.hull_shader.code_size != 0 ||
 		desc.graphics.domain_shader.code_size != 0 ||
+		desc.graphics.rasterizer_state.conservative_rasterization ||
 		desc.graphics.blend_state.logic_op_enable[0] ||
-		desc.graphics.topology == api::primitive_topology::triangle_fan ||
-		desc.graphics.dynamic_states[0] != api::dynamic_state::unknown)
+		desc.graphics.topology == api::primitive_topology::triangle_fan)
 	{
 		*out_handle = { 0 };
 		return false;
@@ -373,16 +354,18 @@ bool reshade::d3d10::device_impl::create_graphics_pipeline(const api::pipeline_d
 	impl->sample_mask = desc.graphics.sample_mask;
 	impl->stencil_reference_value = desc.graphics.depth_stencil_state.stencil_reference_value;
 
-	impl->blend_constant[0] = ((desc.graphics.blend_state.blend_constant      ) & 0xFF) / 255.0f;
-	impl->blend_constant[1] = ((desc.graphics.blend_state.blend_constant >>  4) & 0xFF) / 255.0f;
-	impl->blend_constant[2] = ((desc.graphics.blend_state.blend_constant >>  8) & 0xFF) / 255.0f;
-	impl->blend_constant[3] = ((desc.graphics.blend_state.blend_constant >> 12) & 0xFF) / 255.0f;
+	std::copy_n(desc.graphics.blend_state.blend_constant, 4, impl->blend_constant);
 
-	*out_handle = { reinterpret_cast<uintptr_t>(impl) };
+	// Set first bit to identify this as a 'pipeline_impl' handle for 'destroy_pipeline'
+	static_assert(alignof(pipeline_impl) >= 2);
+
+	*out_handle = { reinterpret_cast<uintptr_t>(impl) | 1 };
 	return true;
 }
 bool reshade::d3d10::device_impl::create_input_layout(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	static_assert(alignof(ID3D10InputLayout) >= 2);
+
 	std::vector<D3D10_INPUT_ELEMENT_DESC> internal_elements;
 	convert_pipeline_desc(desc, internal_elements);
 
@@ -401,6 +384,8 @@ bool reshade::d3d10::device_impl::create_input_layout(const api::pipeline_desc &
 }
 bool reshade::d3d10::device_impl::create_vertex_shader(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	static_assert(alignof(ID3D10VertexShader) >= 2);
+
 	if (com_ptr<ID3D10VertexShader> object;
 		SUCCEEDED(_orig->CreateVertexShader(desc.graphics.vertex_shader.code, desc.graphics.vertex_shader.code_size, &object)))
 	{
@@ -418,6 +403,8 @@ bool reshade::d3d10::device_impl::create_vertex_shader(const api::pipeline_desc 
 }
 bool reshade::d3d10::device_impl::create_geometry_shader(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	static_assert(alignof(ID3D10GeometryShader) >= 2);
+
 	if (com_ptr<ID3D10GeometryShader> object;
 		SUCCEEDED(_orig->CreateGeometryShader(desc.graphics.geometry_shader.code, desc.graphics.geometry_shader.code_size, &object)))
 	{
@@ -435,6 +422,8 @@ bool reshade::d3d10::device_impl::create_geometry_shader(const api::pipeline_des
 }
 bool reshade::d3d10::device_impl::create_pixel_shader(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	static_assert(alignof(ID3D10PixelShader) >= 2);
+
 	if (com_ptr<ID3D10PixelShader> object;
 		SUCCEEDED(_orig->CreatePixelShader(desc.graphics.pixel_shader.code, desc.graphics.pixel_shader.code_size, &object)))
 	{
@@ -452,6 +441,8 @@ bool reshade::d3d10::device_impl::create_pixel_shader(const api::pipeline_desc &
 }
 bool reshade::d3d10::device_impl::create_blend_state(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	static_assert(alignof(ID3D10BlendState1) >= 2);
+
 	D3D10_BLEND_DESC1 internal_desc = {};
 	convert_pipeline_desc(desc, internal_desc);
 
@@ -469,6 +460,8 @@ bool reshade::d3d10::device_impl::create_blend_state(const api::pipeline_desc &d
 }
 bool reshade::d3d10::device_impl::create_rasterizer_state(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	static_assert(alignof(ID3D10RasterizerState) >= 2);
+
 	D3D10_RASTERIZER_DESC internal_desc = {};
 	convert_pipeline_desc(desc, internal_desc);
 
@@ -486,6 +479,8 @@ bool reshade::d3d10::device_impl::create_rasterizer_state(const api::pipeline_de
 }
 bool reshade::d3d10::device_impl::create_depth_stencil_state(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	static_assert(alignof(ID3D10DepthStencilState) >= 2);
+
 	D3D10_DEPTH_STENCIL_DESC internal_desc = {};
 	convert_pipeline_desc(desc, internal_desc);
 
@@ -501,10 +496,10 @@ bool reshade::d3d10::device_impl::create_depth_stencil_state(const api::pipeline
 		return false;
 	}
 }
-void reshade::d3d10::device_impl::destroy_pipeline(api::pipeline_stage type, api::pipeline handle)
+void reshade::d3d10::device_impl::destroy_pipeline(api::pipeline handle)
 {
-	if (type == api::pipeline_stage::all_graphics)
-		delete reinterpret_cast<pipeline_impl *>(handle.handle);
+	if (handle.handle & 1)
+		delete reinterpret_cast<pipeline_impl *>(handle.handle ^ 1);
 	else if (handle.handle != 0)
 		reinterpret_cast<IUnknown *>(handle.handle)->Release();
 }
@@ -846,16 +841,35 @@ void reshade::d3d10::device_impl::get_pipeline_layout_desc(api::pipeline_layout 
 {
 	assert(layout.handle != 0 && count != nullptr);
 
-	const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
-
-	if (params != nullptr)
+	if (layout == global_pipeline_layout)
 	{
-		*count = std::min(*count, static_cast<uint32_t>(layout_impl->params.size()));
-		std::memcpy(params, layout_impl->params.data(), *count * sizeof(api::pipeline_layout_param));
+		if (params != nullptr)
+		{
+			*count = std::min(*count, 3u);
+			for (uint32_t i = 0; i < *count; ++i)
+			{
+				params[i].type = api::pipeline_layout_param_type::push_descriptors;
+				params[i].descriptor_layout = { 0xFFFFFFFFFFFFFFF0 + i };
+			}
+		}
+		else
+		{
+			*count = 3u;
+		}
 	}
 	else
 	{
-		*count = static_cast<uint32_t>(layout_impl->params.size());
+		const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
+
+		if (params != nullptr)
+		{
+			*count = std::min(*count, static_cast<uint32_t>(layout_impl->params.size()));
+			std::memcpy(params, layout_impl->params.data(), *count * sizeof(api::pipeline_layout_param));
+		}
+		else
+		{
+			*count = static_cast<uint32_t>(layout_impl->params.size());
+		}
 	}
 }
 
@@ -869,20 +883,49 @@ void reshade::d3d10::device_impl::get_descriptor_set_layout_desc(api::descriptor
 {
 	assert(layout.handle != 0 && count != nullptr);
 
-	const auto layout_impl = reinterpret_cast<descriptor_set_layout_impl *>(layout.handle);
-
-	if (ranges != nullptr)
+	if (layout.handle >= 0xFFFFFFFFFFFFFFF0)
 	{
-		if (*count != 0)
+		if (ranges != nullptr && *count != 0)
 		{
-			*count = 1;
-			*ranges = layout_impl->range;
+			ranges[0].offset = 0;
+			ranges[0].binding = 0;
+			ranges[0].dx_register_index = 0;
+			ranges[0].dx_register_space = 0;
+
+			switch (layout.handle - 0xFFFFFFFFFFFFFFF0)
+			{
+			case 0:
+				ranges[0].count = D3D10_COMMONSHADER_SAMPLER_SLOT_COUNT;
+				ranges[0].array_size = 1;
+				ranges[0].type = api::descriptor_type::sampler;
+				ranges[0].visibility = api::shader_stage::all;
+				break;
+			case 1:
+				ranges[0].count = D3D10_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
+				ranges[0].array_size = 1;
+				ranges[0].type = api::descriptor_type::shader_resource_view;
+				ranges[0].visibility = api::shader_stage::all;
+				break;
+			case 2:
+				ranges[0].count = D3D10_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
+				ranges[0].array_size = 1;
+				ranges[0].type = api::descriptor_type::constant_buffer;
+				ranges[0].visibility = api::shader_stage::all;
+				break;
+			}
 		}
 	}
 	else
 	{
-		*count = 1;
+		const auto layout_impl = reinterpret_cast<descriptor_set_layout_impl *>(layout.handle);
+
+		if (ranges != nullptr && *count != 0)
+		{
+			ranges[0] = layout_impl->range;
+		}
 	}
+
+	*count = 1;
 }
 
 reshade::api::resource_desc reshade::d3d10::device_impl::get_resource_desc(api::resource resource) const

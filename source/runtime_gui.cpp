@@ -841,7 +841,7 @@ void reshade::runtime::draw_gui()
 				for (const auto &widget : info.overlay_callbacks)
 				{
 					if (ImGui::Begin(widget.first.c_str(), nullptr, ImGuiWindowFlags_NoFocusOnAppearing))
-						widget.second(this, _imgui_context);
+						widget.second(this);
 					ImGui::End();
 				}
 			}
@@ -2186,7 +2186,7 @@ void reshade::runtime::draw_gui_addons()
 				ImGui::Separator();
 				ImGui::Spacing();
 
-				info.settings_overlay_callback(this, _imgui_context);
+				info.settings_overlay_callback(this);
 			}
 		}
 
@@ -3386,11 +3386,11 @@ bool reshade::runtime::init_imgui_resources()
 
 	{	auto &blend_state = pso_desc.graphics.blend_state;
 		blend_state.blend_enable[0] = true;
-		blend_state.src_color_blend_factor[0] = api::blend_factor::src_alpha;
-		blend_state.dst_color_blend_factor[0] = api::blend_factor::inv_src_alpha;
+		blend_state.source_color_blend_factor[0] = api::blend_factor::source_alpha;
+		blend_state.dest_color_blend_factor[0] = api::blend_factor::one_minus_source_alpha;
 		blend_state.color_blend_op[0] = api::blend_op::add;
-		blend_state.src_alpha_blend_factor[0] = api::blend_factor::one;
-		blend_state.dst_alpha_blend_factor[0] = api::blend_factor::inv_src_alpha;
+		blend_state.source_alpha_blend_factor[0] = api::blend_factor::one;
+		blend_state.dest_alpha_blend_factor[0] = api::blend_factor::one_minus_source_alpha;
 		blend_state.alpha_blend_op[0] = api::blend_op::add;
 		blend_state.render_target_write_mask[0] = 0xF;
 	}
@@ -3410,7 +3410,7 @@ bool reshade::runtime::init_imgui_resources()
 	pso_desc.graphics.topology = api::primitive_topology::triangle_list;
 	pso_desc.graphics.render_pass_template = _back_buffer_passes[0];
 
-	if (_device->create_pipeline(pso_desc, &_imgui_pipeline))
+	if (_device->create_pipeline(pso_desc, 0, nullptr, &_imgui_pipeline))
 	{
 		return true;
 	}
@@ -3574,7 +3574,7 @@ void reshade::runtime::destroy_imgui_resources()
 
 	_device->destroy_sampler(_imgui_sampler_state);
 	_imgui_sampler_state = {};
-	_device->destroy_pipeline(api::pipeline_stage::all_graphics, _imgui_pipeline);
+	_device->destroy_pipeline(_imgui_pipeline);
 	_imgui_pipeline = {};
 	_device->destroy_pipeline_layout(_imgui_pipeline_layout);
 	_imgui_pipeline_layout = {};

@@ -33,7 +33,7 @@ namespace reshade::d3d10
 		bool create_resource_view(api::resource resource, api::resource_usage usage_type, const api::resource_view_desc &desc, api::resource_view *out_handle) final;
 		void destroy_resource_view(api::resource_view handle) final;
 
-		bool create_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle) final;
+		bool create_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle) final;
 		bool create_graphics_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle);
 		bool create_input_layout(const api::pipeline_desc &desc, api::pipeline *out_handle);
 		bool create_vertex_shader(const api::pipeline_desc &desc, api::pipeline *out_handle);
@@ -42,7 +42,7 @@ namespace reshade::d3d10
 		bool create_rasterizer_state(const api::pipeline_desc &desc, api::pipeline *out_handle);
 		bool create_blend_state(const api::pipeline_desc &desc, api::pipeline *out_handle);
 		bool create_depth_stencil_state(const api::pipeline_desc &desc, api::pipeline *out_handle);
-		void destroy_pipeline(api::pipeline_stage type, api::pipeline handle) final;
+		void destroy_pipeline(api::pipeline handle) final;
 
 		bool create_render_pass(const api::render_pass_desc &desc, api::render_pass *out_handle) final;
 		void destroy_render_pass(api::render_pass handle) final;
@@ -145,9 +145,6 @@ namespace reshade::d3d10
 		void begin_debug_event(const char *, const float[4]) final {}
 		void finish_debug_event() final {}
 		void insert_debug_marker(const char *, const float[4]) final {}
-
-	protected:
-		api::pipeline_layout _global_pipeline_layout = { 0 };
 
 	private:
 		com_ptr<ID3D10VertexShader> _copy_vert_shader;

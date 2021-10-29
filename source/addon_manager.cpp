@@ -90,8 +90,8 @@ void reshade::unload_addons()
 
 #if RESHADE_ADDON_LOAD
 	// Create copy of add-on list before unloading, since add-ons call 'ReShadeUnregisterAddon' during 'FreeLibrary', which modifies the list
-	const std::vector<reshade::addon::info> loaded_info_copy = addon::loaded_info;
-	for (const reshade::addon::info &info : loaded_info_copy)
+	const std::vector<addon::info> loaded_info_copy = addon::loaded_info;
+	for (const addon::info &info : loaded_info_copy)
 	{
 		if (info.handle == nullptr || info.handle == g_module_handle)
 			continue; // Skip disabled and built-in add-ons
@@ -221,8 +221,8 @@ extern "C" __declspec(dllexport) void ReShadeUnregisterAddon(HMODULE module);
 extern "C" __declspec(dllexport) void ReShadeRegisterEvent(reshade::addon_event ev, void *callback);
 extern "C" __declspec(dllexport) void ReShadeUnregisterEvent(reshade::addon_event ev, void *callback);
 
-extern "C" __declspec(dllexport) void ReShadeRegisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime, void *imgui_context));
-extern "C" __declspec(dllexport) void ReShadeUnregisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime, void *imgui_context));
+extern "C" __declspec(dllexport) void ReShadeRegisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime));
+extern "C" __declspec(dllexport) void ReShadeUnregisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime));
 
 bool ReShadeRegisterAddon(HMODULE module, uint32_t api_version)
 {
@@ -362,7 +362,7 @@ void ReShadeUnregisterEvent(reshade::addon_event ev, void *callback)
 }
 
 #if RESHADE_GUI
-void ReShadeRegisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime, void *imgui_context))
+void ReShadeRegisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime))
 {
 	reshade::addon::info *const info = find_addon_from_address(callback);
 	if (info == nullptr)
@@ -380,7 +380,7 @@ void ReShadeRegisterOverlay(const char *title, void(*callback)(reshade::api::eff
 	LOG(DEBUG) << "Registered overlay with title \"" << title << "\" and callback " << callback << '.';
 #endif
 }
-void ReShadeUnregisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime, void *imgui_context))
+void ReShadeUnregisterOverlay(const char *title, void(*callback)(reshade::api::effect_runtime *runtime))
 {
 	reshade::addon::info *const info = find_addon_from_address(callback);
 	if (info == nullptr)

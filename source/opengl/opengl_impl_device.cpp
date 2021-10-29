@@ -217,12 +217,14 @@ bool reshade::opengl::device_impl::check_capability(api::device_caps capability)
 		return true; // OpenGL 4.0
 	case api::device_caps::logic_op:
 		return true; // OpenGL 1.1
-	case api::device_caps::dual_src_blend:
+	case api::device_caps::dual_source_blend:
 		return true; // OpenGL 3.3
 	case api::device_caps::independent_blend:
 		return true; // OpenGL 4.0
 	case api::device_caps::fill_mode_non_solid:
 		return true;
+	case api::device_caps::conservative_rasterization:
+		return false;
 	case api::device_caps::bind_render_targets_and_depth_stencil:
 		return false;
 	case api::device_caps::multi_viewport:
@@ -429,6 +431,11 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 	GLuint prev_binding = 0;
 	glGetIntegerv(get_binding_for_target(target), reinterpret_cast<GLint *>(&prev_binding));
 
+	// Clear any errors that may still be on the stack
+	while (glGetError() != GL_NO_ERROR)
+		continue;
+	GLenum status = GL_NO_ERROR;
+
 	if (desc.type == api::resource_type::buffer)
 	{
 		if (desc.buffer.size == 0)
@@ -450,7 +457,9 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 		assert(desc.buffer.size <= static_cast<uint64_t>(std::numeric_limits<GLsizeiptr>::max()));
 		glBufferStorage(target, static_cast<GLsizeiptr>(desc.buffer.size), nullptr, usage_flags);
 
-		if (initial_data != nullptr)
+		status = glGetError();
+
+		if (initial_data != nullptr && status == GL_NO_ERROR)
 		{
 			update_buffer_region(initial_data->data, make_resource_handle(GL_BUFFER, object), 0, desc.buffer.size);
 		}
@@ -459,6 +468,14 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 
 		// Handles to buffer resources always have the target set to 'GL_BUFFER'
 		target = GL_BUFFER;
+
+		if (status != GL_NO_ERROR)
+		{
+			glDeleteBuffers(1, &object);
+
+			*out_handle = { 0 };
+			return false;
+		}
 	}
 	else
 	{
@@ -499,15 +516,25 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 			break;
 		}
 
+		status = glGetError();
+
 		glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, swizzle_mask);
 
-		if (initial_data != nullptr)
+		if (initial_data != nullptr && status == GL_NO_ERROR)
 		{
 			for (uint32_t subresource = 0; subresource < static_cast<uint32_t>(desc.texture.depth_or_layers) * desc.texture.levels; ++subresource)
 				update_texture_region(initial_data[subresource], make_resource_handle(target, object), subresource, nullptr);
 		}
 
 		glBindTexture(target, prev_binding);
+
+		if (status != GL_NO_ERROR)
+		{
+			glDeleteTextures(1, &object);
+
+			*out_handle = { 0 };
+			return false;
+		}
 	}
 
 	*out_handle = make_resource_handle(target, object);
@@ -643,43 +670,56 @@ bool reshade::opengl::device_impl::create_resource_view(api::resource resource, 
 		*out_handle = make_resource_view_handle(GL_TEXTURE_CUBE_MAP_POSITIVE_X + desc.texture.first_layer, resource.handle & 0xFFFFFFFF, 0x1);
 		return true;
 	}
+
+	GLuint object = 0;
+	GLuint prev_binding = 0;
+	glGetIntegerv(get_binding_for_target(target), reinterpret_cast<GLint *>(&prev_binding));
+
+	// Clear any errors that may still be on the stack
+	while (glGetError() != GL_NO_ERROR)
+		continue;
+	GLenum status = GL_NO_ERROR;
+
+	glGenTextures(1, &object);
+
+	if (target != GL_TEXTURE_BUFFER)
+	{
+		// Number of levels and layers are clamped to those of the original texture
+		glTextureView(object, target, resource.handle & 0xFFFFFFFF, internal_format, desc.texture.first_level, desc.texture.level_count, desc.texture.first_layer, desc.texture.layer_count);
+
+		glBindTexture(target, object);
+		glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, texture_swizzle);
+	}
 	else
 	{
-		GLuint object = 0;
-		glGenTextures(1, &object);
+		glBindTexture(target, object);
 
-		GLuint prev_binding = 0;
-		glGetIntegerv(get_binding_for_target(target), reinterpret_cast<GLint *>(&prev_binding));
-
-		if (target != GL_TEXTURE_BUFFER)
+		if (desc.buffer.offset == 0 && desc.buffer.size == static_cast<uint64_t>(-1))
 		{
-			// Number of levels and layers are clamped to those of the original texture
-			glTextureView(object, target, resource.handle & 0xFFFFFFFF, internal_format, desc.texture.first_level, desc.texture.level_count, desc.texture.first_layer, desc.texture.layer_count);
-
-			glBindTexture(target, object);
-			glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, texture_swizzle);
+			glTexBuffer(target, internal_format, resource.handle & 0xFFFFFFFF);
 		}
 		else
 		{
-			glBindTexture(target, object);
-
-			if (desc.buffer.offset == 0 && desc.buffer.size == static_cast<uint64_t>(-1))
-			{
-				glTexBuffer(target, internal_format, resource.handle & 0xFFFFFFFF);
-			}
-			else
-			{
-				assert(desc.buffer.offset <= static_cast<uint64_t>(std::numeric_limits<GLintptr>::max()));
-				assert(desc.buffer.size <= static_cast<uint64_t>(std::numeric_limits<GLsizeiptr>::max()));
-				glTexBufferRange(target, internal_format, resource.handle & 0xFFFFFFFF, static_cast<GLintptr>(desc.buffer.offset), static_cast<GLsizeiptr>(desc.buffer.size));
-			}
+			assert(desc.buffer.offset <= static_cast<uint64_t>(std::numeric_limits<GLintptr>::max()));
+			assert(desc.buffer.size <= static_cast<uint64_t>(std::numeric_limits<GLsizeiptr>::max()));
+			glTexBufferRange(target, internal_format, resource.handle & 0xFFFFFFFF, static_cast<GLintptr>(desc.buffer.offset), static_cast<GLsizeiptr>(desc.buffer.size));
 		}
-
-		glBindTexture(target, prev_binding);
-
-		*out_handle = make_resource_view_handle(target, object, is_srgb_format ? 0x2 : 0);
-		return true;
 	}
+
+	status = glGetError();
+
+	glBindTexture(target, prev_binding);
+
+	if (status != GL_NO_ERROR)
+	{
+		glDeleteTextures(1, &object);
+
+		*out_handle = { 0 };
+		return false;
+	}
+
+	*out_handle = make_resource_view_handle(target, object, is_srgb_format ? 0x2 : 0);
+	return true;
 }
 void reshade::opengl::device_impl::destroy_resource_view(api::resource_view handle)
 {
@@ -740,7 +780,7 @@ static bool create_shader_module(GLenum type, const reshade::api::shader_desc &d
 	}
 }
 
-bool reshade::opengl::device_impl::create_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
+bool reshade::opengl::device_impl::create_pipeline(const api::pipeline_desc &desc, uint32_t, const api::dynamic_state *, api::pipeline *out_handle)
 {
 	*out_handle = { 0 };
 
@@ -810,6 +850,12 @@ bool reshade::opengl::device_impl::create_compute_pipeline(const api::pipeline_d
 }
 bool reshade::opengl::device_impl::create_graphics_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	if (desc.graphics.rasterizer_state.conservative_rasterization)
+	{
+		*out_handle = { 0 };
+		return false;
+	}
+
 	GLuint vs, hs, ds, gs, ps;
 	const GLuint program = glCreateProgram();
 
@@ -900,17 +946,14 @@ bool reshade::opengl::device_impl::create_graphics_pipeline(const api::pipeline_
 	impl->sample_alpha_to_coverage = desc.graphics.blend_state.alpha_to_coverage_enable;
 	impl->logic_op_enable = desc.graphics.blend_state.logic_op_enable[0]; // Logic operation applies to all attachments
 	impl->logic_op = convert_logic_op(desc.graphics.blend_state.logic_op[0]);
-	impl->blend_constant[0] = ((desc.graphics.blend_state.blend_constant      ) & 0xFF) / 255.0f;
-	impl->blend_constant[1] = ((desc.graphics.blend_state.blend_constant >>  4) & 0xFF) / 255.0f;
-	impl->blend_constant[2] = ((desc.graphics.blend_state.blend_constant >>  8) & 0xFF) / 255.0f;
-	impl->blend_constant[3] = ((desc.graphics.blend_state.blend_constant >> 12) & 0xFF) / 255.0f;
+	std::copy_n(desc.graphics.blend_state.blend_constant, 4, impl->blend_constant);
 	for (int i = 0; i < 8; ++i)
 	{
 		impl->blend_enable[i] = desc.graphics.blend_state.blend_enable[i];
-		impl->blend_src[i] = convert_blend_factor(desc.graphics.blend_state.src_color_blend_factor[i]);
-		impl->blend_dst[i] = convert_blend_factor(desc.graphics.blend_state.dst_color_blend_factor[i]);
-		impl->blend_src_alpha[i] = convert_blend_factor(desc.graphics.blend_state.src_alpha_blend_factor[i]);
-		impl->blend_dst_alpha[i] = convert_blend_factor(desc.graphics.blend_state.dst_alpha_blend_factor[i]);
+		impl->blend_src[i] = convert_blend_factor(desc.graphics.blend_state.source_color_blend_factor[i]);
+		impl->blend_dst[i] = convert_blend_factor(desc.graphics.blend_state.dest_color_blend_factor[i]);
+		impl->blend_src_alpha[i] = convert_blend_factor(desc.graphics.blend_state.source_alpha_blend_factor[i]);
+		impl->blend_dst_alpha[i] = convert_blend_factor(desc.graphics.blend_state.dest_alpha_blend_factor[i]);
 		impl->blend_eq[i] = convert_blend_op(desc.graphics.blend_state.color_blend_op[i]);
 		impl->blend_eq_alpha[i] = convert_blend_op(desc.graphics.blend_state.alpha_blend_op[i]);
 		impl->color_write_mask[i][0] = (desc.graphics.blend_state.render_target_write_mask[i] & (1 << 0)) != 0;
@@ -953,7 +996,7 @@ bool reshade::opengl::device_impl::create_graphics_pipeline(const api::pipeline_
 	*out_handle = { reinterpret_cast<uintptr_t>(impl) };
 	return true;
 }
-void reshade::opengl::device_impl::destroy_pipeline(api::pipeline_stage, api::pipeline handle)
+void reshade::opengl::device_impl::destroy_pipeline(api::pipeline handle)
 {
 	if (handle.handle == 0)
 		return;
@@ -1876,5 +1919,6 @@ reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attach
 		glBindFramebuffer(GL_FRAMEBUFFER, prev_object);
 	}
 
+	// TODO: Create view based on 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL', 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE' and 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER'
 	return make_resource_view_handle(target, object);
 }

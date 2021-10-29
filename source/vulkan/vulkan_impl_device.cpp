@@ -154,12 +154,15 @@ bool reshade::vulkan::device_impl::check_capability(api::device_caps capability)
 		return _enabled_features.tessellationShader;
 	case api::device_caps::logic_op:
 		return _enabled_features.logicOp;
-	case api::device_caps::dual_src_blend:
+	case api::device_caps::dual_source_blend:
 		return _enabled_features.dualSrcBlend;
 	case api::device_caps::independent_blend:
 		return _enabled_features.independentBlend;
 	case api::device_caps::fill_mode_non_solid:
 		return _enabled_features.fillModeNonSolid;
+	case api::device_caps::conservative_rasterization:
+		// TODO: Enable when the 'VK_EXT_conservative_rasterization' extension is enabled
+		return false;
 	case api::device_caps::bind_render_targets_and_depth_stencil:
 		return false;
 	case api::device_caps::multi_viewport:
@@ -543,14 +546,15 @@ bool reshade::vulkan::device_impl::create_shader_module(VkShaderStageFlagBits st
 	return vk.CreateShaderModule(_orig, &create_info, nullptr, &stage_info.module) == VK_SUCCESS;
 }
 
-bool reshade::vulkan::device_impl::create_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
+bool reshade::vulkan::device_impl::create_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle)
 {
 	switch (desc.type)
 	{
 	case api::pipeline_stage::all_compute:
+		assert(dynamic_state_count == 0);
 		return create_compute_pipeline(desc, out_handle);
 	case api::pipeline_stage::all_graphics:
-		return create_graphics_pipeline(desc, out_handle);
+		return create_graphics_pipeline(desc, dynamic_state_count, dynamic_states, out_handle);
 	default:
 		*out_handle = { 0 };
 		return false;
@@ -585,7 +589,7 @@ exit_failure:
 	*out_handle = { 0 };
 	return false;
 }
-bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
+bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle)
 {
 	if (desc.graphics.render_pass_template.handle == 0)
 	{
@@ -640,14 +644,14 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 
 	{
 		std::vector<VkDynamicState> dyn_states;
-		dyn_states.reserve(2 + ARRAYSIZE(desc.graphics.dynamic_states));
+		dyn_states.reserve(2 + dynamic_state_count);
 		// Always make scissor rectangles and viewports dynamic
 		dyn_states.push_back(VK_DYNAMIC_STATE_SCISSOR);
 		dyn_states.push_back(VK_DYNAMIC_STATE_VIEWPORT);
 
-		for (uint32_t i = 0; i < ARRAYSIZE(desc.graphics.dynamic_states) && desc.graphics.dynamic_states[i] != api::dynamic_state::unknown; ++i)
+		for (uint32_t i = 0; i < dynamic_state_count; ++i)
 		{
-			switch (desc.graphics.dynamic_states[i])
+			switch (dynamic_states[i])
 			{
 			case api::dynamic_state::blend_constant:
 				dyn_states.push_back(VK_DYNAMIC_STATE_BLEND_CONSTANTS);
@@ -666,7 +670,7 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 			if (!_extended_dynamic_state_ext)
 				goto exit_failure;
 
-			switch (desc.graphics.dynamic_states[i])
+			switch (dynamic_states[i])
 			{
 			case api::dynamic_state::cull_mode:
 				dyn_states.push_back(VK_DYNAMIC_STATE_CULL_MODE_EXT);
@@ -705,7 +709,7 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 
 		for (uint32_t i = 0; i < 16 && desc.graphics.input_layout[i].format != api::format::unknown; ++i)
 		{
-			const api::input_layout_element &element = desc.graphics.input_layout[i];
+			const api::input_element &element = desc.graphics.input_layout[i];
 
 			VkVertexInputAttributeDescription &attribute = vertex_attributes.emplace_back();
 			attribute.location = element.location;
@@ -767,6 +771,14 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 		rasterization_state_info.depthBiasSlopeFactor = desc.graphics.rasterizer_state.slope_scaled_depth_bias;
 		rasterization_state_info.lineWidth = 1.0f;
 
+		VkPipelineRasterizationConservativeStateCreateInfoEXT conservative_rasterization_info { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT };
+
+		if (desc.graphics.rasterizer_state.conservative_rasterization != 0)
+		{
+			rasterization_state_info.pNext = &conservative_rasterization_info;
+			conservative_rasterization_info.conservativeRasterizationMode = static_cast<VkConservativeRasterizationModeEXT>(desc.graphics.rasterizer_state.conservative_rasterization);
+		}
+
 		create_info.renderPass = (VkRenderPass)desc.graphics.render_pass_template.handle;
 		const auto render_pass_data = get_user_data_for_object<VK_OBJECT_TYPE_RENDER_PASS>(create_info.renderPass);
 
@@ -807,11 +819,11 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 		for (uint32_t i = 0; i < 8; ++i)
 		{
 			attachment_info[i].blendEnable = desc.graphics.blend_state.blend_enable[i];
-			attachment_info[i].srcColorBlendFactor = convert_blend_factor(desc.graphics.blend_state.src_color_blend_factor[i]);
-			attachment_info[i].dstColorBlendFactor = convert_blend_factor(desc.graphics.blend_state.dst_color_blend_factor[i]);
+			attachment_info[i].srcColorBlendFactor = convert_blend_factor(desc.graphics.blend_state.source_color_blend_factor[i]);
+			attachment_info[i].dstColorBlendFactor = convert_blend_factor(desc.graphics.blend_state.dest_color_blend_factor[i]);
 			attachment_info[i].colorBlendOp = convert_blend_op(desc.graphics.blend_state.color_blend_op[i]);
-			attachment_info[i].srcAlphaBlendFactor = convert_blend_factor(desc.graphics.blend_state.src_alpha_blend_factor[i]);
-			attachment_info[i].dstAlphaBlendFactor = convert_blend_factor(desc.graphics.blend_state.dst_alpha_blend_factor[i]);
+			attachment_info[i].srcAlphaBlendFactor = convert_blend_factor(desc.graphics.blend_state.source_alpha_blend_factor[i]);
+			attachment_info[i].dstAlphaBlendFactor = convert_blend_factor(desc.graphics.blend_state.dest_alpha_blend_factor[i]);
 			attachment_info[i].alphaBlendOp = convert_blend_op(desc.graphics.blend_state.alpha_blend_op[i]);
 			attachment_info[i].colorWriteMask = desc.graphics.blend_state.render_target_write_mask[i];
 		}
@@ -827,10 +839,7 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 		color_blend_state_info.logicOp = convert_logic_op(desc.graphics.blend_state.logic_op[0]);
 		color_blend_state_info.attachmentCount = num_color_attachments;
 		color_blend_state_info.pAttachments = attachment_info;
-		color_blend_state_info.blendConstants[0] = ((desc.graphics.blend_state.blend_constant) & 0xFF) / 255.0f;
-		color_blend_state_info.blendConstants[1] = ((desc.graphics.blend_state.blend_constant >> 4) & 0xFF) / 255.0f;
-		color_blend_state_info.blendConstants[2] = ((desc.graphics.blend_state.blend_constant >> 8) & 0xFF) / 255.0f;
-		color_blend_state_info.blendConstants[3] = ((desc.graphics.blend_state.blend_constant >> 12) & 0xFF) / 255.0f;
+		std::copy_n(desc.graphics.blend_state.blend_constant, 4, color_blend_state_info.blendConstants);
 
 		if (VkPipeline object = VK_NULL_HANDLE;
 			vk.CreateGraphicsPipelines(_orig, VK_NULL_HANDLE, 1, &create_info, nullptr, &object) == VK_SUCCESS)
@@ -850,7 +859,7 @@ exit_failure:
 	*out_handle = { 0 };
 	return false;
 }
-void reshade::vulkan::device_impl::destroy_pipeline(api::pipeline_stage, api::pipeline handle)
+void reshade::vulkan::device_impl::destroy_pipeline(api::pipeline handle)
 {
 	vk.DestroyPipeline(_orig, (VkPipeline)handle.handle, nullptr);
 }

@@ -1224,6 +1224,14 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 		desc.graphics.rasterizer_state.slope_scaled_depth_bias = rasterization_state_info.depthBiasSlopeFactor;
 		desc.graphics.rasterizer_state.depth_clip_enable = !rasterization_state_info.depthClampEnable;
 		desc.graphics.rasterizer_state.scissor_enable = true;
+
+		const auto conservative_rasterization_info = find_in_structure_chain<VkPipelineRasterizationConservativeStateCreateInfoEXT>(
+			rasterization_state_info.pNext, VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT);
+
+		if (conservative_rasterization_info != nullptr)
+		{
+			desc.graphics.rasterizer_state.conservative_rasterization = static_cast<uint32_t>(conservative_rasterization_info->conservativeRasterizationMode);
+		}
 	}
 
 	if (create_info.pMultisampleState != nullptr)
@@ -1264,11 +1272,7 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 	{
 		const VkPipelineColorBlendStateCreateInfo &color_blend_state_info = *create_info.pColorBlendState;
 
-		desc.graphics.blend_state.blend_constant =
-			(static_cast<uint32_t>(color_blend_state_info.blendConstants[0] * 255)) |
-			(static_cast<uint32_t>(color_blend_state_info.blendConstants[1] * 255) << 4) |
-			(static_cast<uint32_t>(color_blend_state_info.blendConstants[2] * 255) << 8) |
-			(static_cast<uint32_t>(color_blend_state_info.blendConstants[3] * 255) << 12);
+		std::copy_n(color_blend_state_info.blendConstants, 4, desc.graphics.blend_state.blend_constant);
 
 		for (uint32_t a = 0; a < color_blend_state_info.attachmentCount; ++a)
 		{
@@ -1277,80 +1281,80 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 			desc.graphics.blend_state.blend_enable[a] = attachment.blendEnable;
 			desc.graphics.blend_state.logic_op_enable[a] = color_blend_state_info.logicOpEnable;
 			desc.graphics.blend_state.color_blend_op[a] = convert_blend_op(attachment.colorBlendOp);
-			desc.graphics.blend_state.src_color_blend_factor[a] = convert_blend_factor(attachment.srcColorBlendFactor);
-			desc.graphics.blend_state.dst_color_blend_factor[a] = convert_blend_factor(attachment.dstColorBlendFactor);
+			desc.graphics.blend_state.source_color_blend_factor[a] = convert_blend_factor(attachment.srcColorBlendFactor);
+			desc.graphics.blend_state.dest_color_blend_factor[a] = convert_blend_factor(attachment.dstColorBlendFactor);
 			desc.graphics.blend_state.alpha_blend_op[a] = convert_blend_op(attachment.alphaBlendOp);
-			desc.graphics.blend_state.src_alpha_blend_factor[a] = convert_blend_factor(attachment.srcAlphaBlendFactor);
-			desc.graphics.blend_state.dst_alpha_blend_factor[a] = convert_blend_factor(attachment.dstAlphaBlendFactor);
+			desc.graphics.blend_state.source_alpha_blend_factor[a] = convert_blend_factor(attachment.srcAlphaBlendFactor);
+			desc.graphics.blend_state.dest_alpha_blend_factor[a] = convert_blend_factor(attachment.dstAlphaBlendFactor);
 			desc.graphics.blend_state.logic_op[a] = convert_logic_op(color_blend_state_info.logicOp);
 			desc.graphics.blend_state.render_target_write_mask[a] = static_cast<uint8_t>(attachment.colorWriteMask);
 		}
 	}
 
-	if (create_info.pDynamicState != nullptr)
-	{
-		const VkPipelineDynamicStateCreateInfo &dynamic_state_info = *create_info.pDynamicState;
+	return desc;
+}
 
-		for (uint32_t i = 0, k = 0; i < dynamic_state_info.dynamicStateCount && k < 32; ++i)
+void reshade::vulkan::convert_dynamic_states(const VkPipelineDynamicStateCreateInfo &create_info, std::vector<reshade::api::dynamic_state> &states)
+{
+	states.reserve(create_info.dynamicStateCount);
+
+	for (uint32_t i = 0; i < create_info.dynamicStateCount; ++i)
+	{
+		switch (create_info.pDynamicStates[i])
 		{
-			switch (dynamic_state_info.pDynamicStates[i])
-			{
-			case VK_DYNAMIC_STATE_DEPTH_BIAS:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::depth_bias;
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::depth_bias_clamp;
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::depth_bias_slope_scaled;
-				break;
-			case VK_DYNAMIC_STATE_BLEND_CONSTANTS:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::blend_constant;
-				break;
-			case VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::stencil_read_mask;
-				break;
-			case VK_DYNAMIC_STATE_STENCIL_WRITE_MASK:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::stencil_write_mask;
-				break;
-			case VK_DYNAMIC_STATE_STENCIL_REFERENCE:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::stencil_reference_value;
-				break;
-			case VK_DYNAMIC_STATE_CULL_MODE_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::cull_mode;
-				break;
-			case VK_DYNAMIC_STATE_FRONT_FACE_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::front_counter_clockwise;
-				break;
-			case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::primitive_topology;
-				break;
-			case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::depth_enable;
-				break;
-			case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::depth_write_mask;
-				break;
-			case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::depth_func;
-				break;
-			case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::depth_clip_enable;
-				break;
-			case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::stencil_enable;
-				break;
-			case VK_DYNAMIC_STATE_STENCIL_OP_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::back_stencil_func;
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::front_stencil_func;
-				break;
-			case VK_DYNAMIC_STATE_LOGIC_OP_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::logic_op;
-				break;
-			case VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT:
-				desc.graphics.dynamic_states[k++] = api::dynamic_state::render_target_write_mask;
-				break;
-			}
+		case VK_DYNAMIC_STATE_DEPTH_BIAS:
+			states.push_back(api::dynamic_state::depth_bias);
+			states.push_back(api::dynamic_state::depth_bias_clamp);
+			states.push_back(api::dynamic_state::depth_bias_slope_scaled);
+			break;
+		case VK_DYNAMIC_STATE_BLEND_CONSTANTS:
+			states.push_back(api::dynamic_state::blend_constant);
+			break;
+		case VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK:
+			states.push_back(api::dynamic_state::stencil_read_mask);
+			break;
+		case VK_DYNAMIC_STATE_STENCIL_WRITE_MASK:
+			states.push_back(api::dynamic_state::stencil_write_mask);
+			break;
+		case VK_DYNAMIC_STATE_STENCIL_REFERENCE:
+			states.push_back(api::dynamic_state::stencil_reference_value);
+			break;
+		case VK_DYNAMIC_STATE_CULL_MODE_EXT:
+			states.push_back(api::dynamic_state::cull_mode);
+			break;
+		case VK_DYNAMIC_STATE_FRONT_FACE_EXT:
+			states.push_back(api::dynamic_state::front_counter_clockwise);
+			break;
+		case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY_EXT:
+			states.push_back(api::dynamic_state::primitive_topology);
+			break;
+		case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT:
+			states.push_back(api::dynamic_state::depth_enable);
+			break;
+		case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT:
+			states.push_back(api::dynamic_state::depth_write_mask);
+			break;
+		case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT:
+			states.push_back(api::dynamic_state::depth_func);
+			break;
+		case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE_EXT:
+			states.push_back(api::dynamic_state::depth_clip_enable);
+			break;
+		case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE_EXT:
+			states.push_back(api::dynamic_state::stencil_enable);
+			break;
+		case VK_DYNAMIC_STATE_STENCIL_OP_EXT:
+			states.push_back(api::dynamic_state::back_stencil_func);
+			states.push_back(api::dynamic_state::front_stencil_func);
+			break;
+		case VK_DYNAMIC_STATE_LOGIC_OP_EXT:
+			states.push_back(api::dynamic_state::logic_op);
+			break;
+		case VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT:
+			states.push_back(api::dynamic_state::render_target_write_mask);
+			break;
 		}
 	}
-
-	return desc;
 }
 
 auto reshade::vulkan::convert_logic_op(api::logic_op value) -> VkLogicOp

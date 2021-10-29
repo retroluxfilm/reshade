@@ -11,8 +11,6 @@
 #include <unordered_map>
 #include <cassert>
 
-imgui_function_table g_imgui_function_table;
-
 namespace
 {
 	bool s_do_capture = false;
@@ -150,15 +148,15 @@ static inline auto to_string(reshade::api::dynamic_state value)
 		return "logic_op_enable";
 	case reshade::api::dynamic_state::color_blend_op:
 		return "color_blend_op";
-	case reshade::api::dynamic_state::src_color_blend_factor:
+	case reshade::api::dynamic_state::source_color_blend_factor:
 		return "src_color_blend_factor";
-	case reshade::api::dynamic_state::dst_color_blend_factor:
+	case reshade::api::dynamic_state::dest_color_blend_factor:
 		return "dst_color_blend_factor";
 	case reshade::api::dynamic_state::alpha_blend_op:
 		return "alpha_blend_op";
-	case reshade::api::dynamic_state::src_alpha_blend_factor:
+	case reshade::api::dynamic_state::source_alpha_blend_factor:
 		return "src_alpha_blend_factor";
-	case reshade::api::dynamic_state::dst_alpha_blend_factor:
+	case reshade::api::dynamic_state::dest_alpha_blend_factor:
 		return "dst_alpha_blend_factor";
 	case reshade::api::dynamic_state::logic_op:
 		return "logic_op";
@@ -340,7 +338,7 @@ static void on_destroy_resource_view(reshade::api::device *device, reshade::api:
 	assert(s_resource_views.find(handle.handle) != s_resource_views.end());
 	s_resource_views.erase(handle.handle);
 }
-static void on_init_pipeline(reshade::api::device *device, const reshade::api::pipeline_desc &desc, reshade::api::pipeline handle)
+static void on_init_pipeline(reshade::api::device *device, const reshade::api::pipeline_desc &desc, uint32_t, const reshade::api::dynamic_state *, reshade::api::pipeline handle)
 {
 	const std::lock_guard<std::mutex> lock(s_mutex);
 
@@ -789,7 +787,7 @@ static void on_present(reshade::api::command_queue *, reshade::api::swapchain *)
 	s_do_capture = false;
 }
 
-static void draw_overlay(reshade::api::effect_runtime *, void *)
+static void draw_overlay(reshade::api::effect_runtime *)
 {
 	if (!s_do_capture)
 	{

@@ -128,6 +128,7 @@ void reshade::d3d12::command_list_impl::bind_pipeline(api::pipeline_stage type, 
 		SUCCEEDED(pipeline_object->GetPrivateData(extra_data_guid, &extra_data_size, &extra_data)))
 	{
 		_orig->IASetPrimitiveTopology(extra_data.topology);
+		_orig->OMSetBlendFactor(extra_data.blend_constant);
 	}
 }
 void reshade::d3d12::command_list_impl::bind_pipeline_states(uint32_t count, const api::dynamic_state *states, const uint32_t *values)
@@ -136,6 +137,9 @@ void reshade::d3d12::command_list_impl::bind_pipeline_states(uint32_t count, con
 	{
 		switch (states[i])
 		{
+		case api::dynamic_state::stencil_reference_value:
+			_orig->OMSetStencilRef(values[i]);
+			break;
 		case api::dynamic_state::blend_constant:
 		{
 			float blend_factor[4];
@@ -148,9 +152,6 @@ void reshade::d3d12::command_list_impl::bind_pipeline_states(uint32_t count, con
 		}
 		case api::dynamic_state::primitive_topology:
 			_orig->IASetPrimitiveTopology(static_cast<D3D12_PRIMITIVE_TOPOLOGY>(values[i]));
-			break;
-		case api::dynamic_state::stencil_reference_value:
-			_orig->OMSetStencilRef(values[i]);
 			break;
 		default:
 			assert(false);

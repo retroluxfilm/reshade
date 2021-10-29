@@ -26,6 +26,7 @@ extern "C" __declspec(dllexport) void ReShadeLogMessage(HMODULE module, int leve
 }
 
 #if RESHADE_GUI
+
 #include "reshade.hpp"
 #include "imgui_function_table.hpp"
 
@@ -33,10 +34,11 @@ extern imgui_function_table g_imgui_function_table;
 
 extern "C" __declspec(dllexport) const imgui_function_table *ReShadeGetImGuiFunctionTable(uint32_t version)
 {
-	if (version == RESHADE_API_VERSION_IMGUI)
+	if (version == IMGUI_VERSION_NUM)
 		return &g_imgui_function_table;
 	return nullptr;
 }
+
 #endif
 
 #endif

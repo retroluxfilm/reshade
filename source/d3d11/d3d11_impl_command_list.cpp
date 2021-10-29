@@ -53,8 +53,7 @@ void reshade::d3d11::device_context_impl::barrier(uint32_t count, const api::res
 			(new_states[i] & (api::resource_usage::depth_stencil | api::resource_usage::render_target)) != api::resource_usage::undefined)
 			transitions_away_from_shader_resource_usage = true;
 		if ((old_states[i] & api::resource_usage::unordered_access) != api::resource_usage::undefined &&
-			(new_states[i] & api::resource_usage::unordered_access) == api::resource_usage::undefined &&
-			(new_states[i] & (api::resource_usage::depth_stencil | api::resource_usage::render_target)) != api::resource_usage::undefined)
+			(new_states[i] & api::resource_usage::unordered_access) == api::resource_usage::undefined)
 			transitions_away_from_unordered_access_usage = true;
 	}
 
@@ -121,7 +120,8 @@ void reshade::d3d11::device_context_impl::bind_pipeline(api::pipeline_stage type
 	switch (type)
 	{
 	case api::pipeline_stage::all_graphics:
-		reinterpret_cast<pipeline_impl *>(pipeline.handle)->apply(_orig);
+		assert(pipeline.handle & 1);
+		reinterpret_cast<pipeline_impl *>(pipeline.handle ^ 1)->apply(_orig);
 		break;
 	case api::pipeline_stage::input_assembler:
 		_orig->IASetInputLayout(reinterpret_cast<ID3D11InputLayout *>(pipeline.handle));
