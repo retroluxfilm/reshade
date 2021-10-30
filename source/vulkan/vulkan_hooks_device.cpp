@@ -1547,11 +1547,11 @@ VkResult VKAPI_CALL vkAllocateDescriptorSets(VkDevice device, const VkDescriptor
 		data->offset = pool_data->next_offset;
 		pool_data->next_offset += layout_data->num_descriptors;
 
-		if (pool_data->next_set > pool_data->max_sets)
+		if (pool_data->next_set >= pool_data->max_sets)
 		{
 			pool_data->next_set = 0;
 		}
-		if (pool_data->next_offset > pool_data->max_descriptors)
+		if (pool_data->next_offset >= pool_data->max_descriptors)
 		{
 			// Out of pool memory, simply wrap around
 			data->offset = 0;
@@ -1559,6 +1559,31 @@ VkResult VKAPI_CALL vkAllocateDescriptorSets(VkDevice device, const VkDescriptor
 		}
 
 		device_impl->register_object(VK_OBJECT_TYPE_DESCRIPTOR_SET, (uint64_t)pDescriptorSets[i], data);
+	}
+#endif
+
+	return result;
+}
+VkResult VKAPI_CALL vkFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptorPool, uint32_t descriptorSetCount, const VkDescriptorSet *pDescriptorSets)
+{
+	reshade::vulkan::device_impl *const device_impl = g_vulkan_devices.at(dispatch_key_from_handle(device));
+	GET_DISPATCH_PTR_FROM(FreeDescriptorSets, device_impl);
+
+	assert(pDescriptorSets != nullptr);
+
+	const VkResult result = trampoline(device, descriptorPool, descriptorSetCount, pDescriptorSets);
+	if (result < VK_SUCCESS)
+	{
+#if RESHADE_VERBOSE_LOG
+		LOG(WARN) << "vkFreeDescriptorSets" << " failed with error code " << result << '.';
+#endif
+		return result;
+	}
+
+#if RESHADE_ADDON
+	for (uint32_t i = 0; i < descriptorSetCount; ++i)
+	{
+		device_impl->unregister_object(VK_OBJECT_TYPE_DESCRIPTOR_SET, (uint64_t)pDescriptorSets[i]);
 	}
 #endif
 
@@ -1649,20 +1674,20 @@ VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCrea
 	data.area.height = pCreateInfo->height;
 	data.attachments.resize(pCreateInfo->attachmentCount);
 	data.attachment_types.resize(pCreateInfo->attachmentCount);
-	for (uint32_t i = 0; i < pCreateInfo->attachmentCount; ++i)
+	for (uint32_t a = 0; a < pCreateInfo->attachmentCount; ++a)
 	{
-		data.attachments[i] = pCreateInfo->pAttachments[i];
-		data.attachment_types[i] = pass_attachments[i].format_flags;
+		data.attachments[a] = pCreateInfo->pAttachments[a];
+		data.attachment_types[a] = pass_attachments[a].format_flags;
 	}
 
 	reshade::api::framebuffer_desc desc = {};
 	desc.render_pass_template = { (uint64_t)pCreateInfo->renderPass };
-	for (uint32_t i = 0, k = 0; i < data.attachments.size(); ++i)
+	for (uint32_t a = 0, k = 0; a < data.attachments.size(); ++a)
 	{
-		if (data.attachment_types[i] & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
-			desc.depth_stencil = { (uint64_t)data.attachments[i] };
-		else if (data.attachment_types[i] & (VK_IMAGE_ASPECT_COLOR_BIT) && k < 8)
-			desc.render_targets[k++] = { (uint64_t)data.attachments[i] };
+		if (data.attachment_types[a] & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
+			desc.depth_stencil = { (uint64_t)data.attachments[a] };
+		else if (data.attachment_types[a] & (VK_IMAGE_ASPECT_COLOR_BIT) && k < 8)
+			desc.render_targets[k++] = { (uint64_t)data.attachments[a] };
 	}
 
 	desc.width = pCreateInfo->width;
@@ -1673,12 +1698,12 @@ VkResult VKAPI_CALL vkCreateFramebuffer(VkDevice device, const VkFramebufferCrea
 
 	if (reshade::invoke_addon_event<reshade::addon_event::create_framebuffer>(device_impl, desc))
 	{
-		for (uint32_t i = 0, k = 0; i < data.attachments.size(); ++i)
+		for (uint32_t a = 0, k = 0; a < data.attachments.size(); ++a)
 		{
-			if (data.attachment_types[i] & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
-				data.attachments[i] = (VkImageView)desc.depth_stencil.handle;
-			else if (data.attachment_types[i] & (VK_IMAGE_ASPECT_COLOR_BIT) && k < 8)
-				data.attachments[i] = (VkImageView)desc.render_targets[k++].handle;
+			if (data.attachment_types[a] & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
+				data.attachments[a] = (VkImageView)desc.depth_stencil.handle;
+			else if (data.attachment_types[a] & (VK_IMAGE_ASPECT_COLOR_BIT) && k < 8)
+				data.attachments[a] = (VkImageView)desc.render_targets[k++].handle;
 		}
 
 		create_info = *pCreateInfo;
@@ -1744,11 +1769,11 @@ VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreate
 	if (reshade::invoke_addon_event<reshade::addon_event::create_render_pass>(device_impl, desc))
 	{
 		attachments.resize(pCreateInfo->attachmentCount);
-		for (uint32_t i = 0; i < pCreateInfo->attachmentCount; ++i)
+		for (uint32_t a = 0; a < pCreateInfo->attachmentCount; ++a)
 		{
-			attachments[i] = pCreateInfo->pAttachments[i];
-			attachments[i].samples = static_cast<VkSampleCountFlagBits>(desc.samples);
-			attachments[i].format = reshade::vulkan::convert_format(desc.render_targets_format[i]);
+			attachments[a] = pCreateInfo->pAttachments[a];
+			attachments[a].format = reshade::vulkan::convert_format(desc.render_targets_format[a]);
+			attachments[a].samples = static_cast<VkSampleCountFlagBits>(desc.samples);
 		}
 
 		create_info = *pCreateInfo;
@@ -1770,18 +1795,18 @@ VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreate
 	reshade::vulkan::object_data<VK_OBJECT_TYPE_RENDER_PASS> data;
 	data.attachments.reserve(pCreateInfo->attachmentCount);
 
-	for (uint32_t attachment = 0; attachment < pCreateInfo->attachmentCount; ++attachment)
+	for (uint32_t a = 0; a < pCreateInfo->attachmentCount; ++a)
 	{
 		extern VkImageAspectFlags aspect_flags_from_format(VkFormat format);
-		VkImageAspectFlags clear_flags = aspect_flags_from_format(pCreateInfo->pAttachments[attachment].format);
+		VkImageAspectFlags clear_flags = aspect_flags_from_format(pCreateInfo->pAttachments[a].format);
 		const VkImageAspectFlags format_flags = clear_flags;
 
-		if (pCreateInfo->pAttachments[attachment].loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
+		if (pCreateInfo->pAttachments[a].loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
 			clear_flags &= ~(VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT);
-		if (pCreateInfo->pAttachments[attachment].stencilLoadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
+		if (pCreateInfo->pAttachments[a].stencilLoadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
 			clear_flags &= ~(VK_IMAGE_ASPECT_STENCIL_BIT);
 
-		data.attachments.push_back({ pCreateInfo->pAttachments[attachment].initialLayout, clear_flags, format_flags });
+		data.attachments.push_back({ pCreateInfo->pAttachments[a].initialLayout, clear_flags, format_flags });
 	}
 
 	device_impl->register_object<VK_OBJECT_TYPE_RENDER_PASS>(*pRenderPass, std::move(data));
@@ -1813,11 +1838,11 @@ VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreat
 	if (reshade::invoke_addon_event<reshade::addon_event::create_render_pass>(device_impl, desc))
 	{
 		attachments.resize(pCreateInfo->attachmentCount);
-		for (uint32_t i = 0; i < pCreateInfo->attachmentCount; ++i)
+		for (uint32_t a = 0; a < pCreateInfo->attachmentCount; ++a)
 		{
-			attachments[i] = pCreateInfo->pAttachments[i];
-			attachments[i].samples = static_cast<VkSampleCountFlagBits>(desc.samples);
-			attachments[i].format = reshade::vulkan::convert_format(desc.render_targets_format[i]);
+			attachments[a] = pCreateInfo->pAttachments[a];
+			attachments[a].format = reshade::vulkan::convert_format(desc.render_targets_format[a]);
+			attachments[a].samples = static_cast<VkSampleCountFlagBits>(desc.samples);
 		}
 
 		create_info = *pCreateInfo;
@@ -1839,18 +1864,18 @@ VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreat
 	reshade::vulkan::object_data<VK_OBJECT_TYPE_RENDER_PASS> data;
 	data.attachments.reserve(pCreateInfo->attachmentCount);
 
-	for (uint32_t attachment = 0; attachment < pCreateInfo->attachmentCount; ++attachment)
+	for (uint32_t a = 0; a < pCreateInfo->attachmentCount; ++a)
 	{
 		extern VkImageAspectFlags aspect_flags_from_format(VkFormat format);
-		VkImageAspectFlags clear_flags = aspect_flags_from_format(pCreateInfo->pAttachments[attachment].format);
+		VkImageAspectFlags clear_flags = aspect_flags_from_format(pCreateInfo->pAttachments[a].format);
 		const VkImageAspectFlags format_flags = clear_flags;
 
-		if (pCreateInfo->pAttachments[attachment].loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
+		if (pCreateInfo->pAttachments[a].loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
 			clear_flags &= ~(VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT);
-		if (pCreateInfo->pAttachments[attachment].stencilLoadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
+		if (pCreateInfo->pAttachments[a].stencilLoadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
 			clear_flags &= ~(VK_IMAGE_ASPECT_STENCIL_BIT);
 
-		data.attachments.push_back({ pCreateInfo->pAttachments[attachment].initialLayout, clear_flags, format_flags });
+		data.attachments.push_back({ pCreateInfo->pAttachments[a].initialLayout, clear_flags, format_flags });
 	}
 
 	device_impl->register_object<VK_OBJECT_TYPE_RENDER_PASS>(*pRenderPass, std::move(data));
