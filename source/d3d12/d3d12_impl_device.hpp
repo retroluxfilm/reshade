@@ -32,31 +32,46 @@ namespace reshade::d3d12
 		bool create_resource(const api::resource_desc &desc, const api::subresource_data *initial_data, api::resource_usage initial_state, api::resource *out_handle) final;
 		void destroy_resource(api::resource handle) final;
 
+		api::resource_desc get_resource_desc(api::resource resource) const final;
+		void set_resource_name(api::resource handle, const char *name) final;
+
 		bool create_resource_view(api::resource resource, api::resource_usage usage_type, const api::resource_view_desc &desc, api::resource_view *out_handle) final;
 		void destroy_resource_view(api::resource_view handle) final;
+
+		api::resource get_resource_from_view(api::resource_view view) const final;
+		api::resource_view_desc get_resource_view_desc(api::resource_view view) const final;
+		void set_resource_view_name(api::resource_view handle, const char *name) final;
 
 		bool create_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle) final;
 		bool create_compute_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle);
 		bool create_graphics_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle);
 		void destroy_pipeline(api::pipeline handle) final;
 
-		bool create_render_pass(const api::render_pass_desc &desc, api::render_pass *out_handle) final;
+		bool create_render_pass(uint32_t attachment_count, const api::attachment_desc *attachments, api::render_pass *out_handle) final;
 		void destroy_render_pass(api::render_pass handle) final;
 
-		bool create_framebuffer(const api::framebuffer_desc &desc, api::framebuffer *out_handle) final;
+		bool create_framebuffer(api::render_pass render_pass_template, uint32_t attachment_count, const api::resource_view *attachments, api::framebuffer *out_handle) final;
 		void destroy_framebuffer(api::framebuffer handle) final;
+
+		api::resource_view get_framebuffer_attachment(api::framebuffer framebuffer, api::attachment_type type, uint32_t index) const final;
 
 		bool create_pipeline_layout(uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout *out_handle) final;
 		void destroy_pipeline_layout(api::pipeline_layout handle) final;
 
+		void get_pipeline_layout_params(api::pipeline_layout layout, uint32_t *out_count, api::pipeline_layout_param *out_params) const final;
+
 		bool create_descriptor_set_layout(uint32_t range_count, const api::descriptor_range *ranges, bool push_descriptors, api::descriptor_set_layout *out_handle) final;
 		void destroy_descriptor_set_layout(api::descriptor_set_layout handle) final;
+
+		void get_descriptor_set_layout_ranges(api::descriptor_set_layout layout, uint32_t *out_count, api::descriptor_range *out_ranges) const final;
 
 		bool create_query_pool(api::query_type type, uint32_t size, api::query_pool *out_handle) final;
 		void destroy_query_pool(api::query_pool handle) final;
 
 		bool create_descriptor_sets(uint32_t count, const api::descriptor_set_layout *layouts, api::descriptor_set *out_sets) final;
 		void destroy_descriptor_sets(uint32_t count, const api::descriptor_set *sets) final;
+
+		void get_descriptor_pool_offset(api::descriptor_set set, api::descriptor_pool *out_pool, uint32_t *out_offset) const final;
 
 		bool map_buffer_region(api::resource resource, uint64_t offset, uint64_t size, api::map_access access, void **out_data) final;
 		void unmap_buffer_region(api::resource resource) final;
@@ -71,20 +86,6 @@ namespace reshade::d3d12
 		bool get_query_pool_results(api::query_pool pool, uint32_t first, uint32_t count, void *results, uint32_t stride) final;
 
 		void wait_idle() const final;
-
-		void set_resource_name(api::resource resource, const char *name) final;
-
-		void get_pipeline_layout_desc(api::pipeline_layout layout, uint32_t *out_count, api::pipeline_layout_param *out_params) const final;
-
-		void get_descriptor_pool_offset(api::descriptor_set set, api::descriptor_pool *out_pool, uint32_t *out_offset) const final;
-
-		void get_descriptor_set_layout_desc(api::descriptor_set_layout layout, uint32_t *out_count, api::descriptor_range *out_ranges) const final;
-
-		api::resource_desc get_resource_desc(api::resource resource) const final;
-
-		api::resource get_resource_from_view(api::resource_view view) const final;
-
-		api::resource_view get_framebuffer_attachment(api::framebuffer framebuffer, api::attachment_type type, uint32_t index) const final;
 
 		bool resolve_gpu_address(D3D12_GPU_VIRTUAL_ADDRESS address, api::resource *out_resource, uint64_t *out_offset) const;
 		bool resolve_descriptor_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle, D3D12_DESCRIPTOR_HEAP_TYPE type, api::descriptor_set *out_set) const;
@@ -110,10 +111,10 @@ namespace reshade::d3d12
 			return _views.find(handle.ptr) != _views.end();
 		}
 
-		inline void register_resource_view(D3D12_CPU_DESCRIPTOR_HANDLE handle, ID3D12Resource *resource)
+		inline void register_resource_view(D3D12_CPU_DESCRIPTOR_HANDLE handle, ID3D12Resource *resource, const api::resource_view_desc &desc)
 		{
 			const std::unique_lock<std::shared_mutex> lock(_resource_mutex);
-			_views.insert_or_assign(handle.ptr, resource);
+			_views.insert_or_assign(handle.ptr, std::make_pair(resource, desc));
 		}
 
 	private:
@@ -128,7 +129,7 @@ namespace reshade::d3d12
 		mutable std::shared_mutex _heap_mutex;
 		mutable std::shared_mutex _resource_mutex;
 		std::unordered_map<UINT64, UINT> _sets;
-		std::unordered_map<SIZE_T, ID3D12Resource *> _views;
+		std::unordered_map<SIZE_T, std::pair<ID3D12Resource *, api::resource_view_desc>> _views;
 #if RESHADE_ADDON
 		std::vector<ID3D12DescriptorHeap *> _descriptor_heaps;
 		std::vector<std::pair<ID3D12Resource *, D3D12_GPU_VIRTUAL_ADDRESS_RANGE>> _buffer_gpu_addresses;

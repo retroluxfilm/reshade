@@ -214,6 +214,53 @@ void reshade::d3d10::device_impl::destroy_resource(api::resource handle)
 		reinterpret_cast<IUnknown *>(handle.handle)->Release();
 }
 
+reshade::api::resource_desc reshade::d3d10::device_impl::get_resource_desc(api::resource resource) const
+{
+	assert(resource.handle != 0);
+
+	const auto object = reinterpret_cast<ID3D10Resource *>(resource.handle);
+
+	D3D10_RESOURCE_DIMENSION dimension;
+	object->GetType(&dimension);
+	switch (dimension)
+	{
+		case D3D10_RESOURCE_DIMENSION_BUFFER:
+		{
+			D3D10_BUFFER_DESC internal_desc;
+			static_cast<ID3D10Buffer *>(object)->GetDesc(&internal_desc);
+			return convert_resource_desc(internal_desc);
+		}
+		case D3D10_RESOURCE_DIMENSION_TEXTURE1D:
+		{
+			D3D10_TEXTURE1D_DESC internal_desc;
+			static_cast<ID3D10Texture1D *>(object)->GetDesc(&internal_desc);
+			return convert_resource_desc(internal_desc);
+		}
+		case D3D10_RESOURCE_DIMENSION_TEXTURE2D:
+		{
+			D3D10_TEXTURE2D_DESC internal_desc;
+			static_cast<ID3D10Texture2D *>(object)->GetDesc(&internal_desc);
+			return convert_resource_desc(internal_desc);
+		}
+		case D3D10_RESOURCE_DIMENSION_TEXTURE3D:
+		{
+			D3D10_TEXTURE3D_DESC internal_desc;
+			static_cast<ID3D10Texture3D *>(object)->GetDesc(&internal_desc);
+			return convert_resource_desc(internal_desc);
+		}
+	}
+
+	assert(false); // Not implemented
+	return api::resource_desc {};
+}
+void reshade::d3d10::device_impl::set_resource_name(api::resource handle, const char *name)
+{
+	assert(handle.handle != 0);
+
+	constexpr GUID debug_object_name_guid = { 0x429b8c22, 0x9188, 0x4b0c, { 0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00} }; // WKPDID_D3DDebugObjectName
+	reinterpret_cast<ID3D10DeviceChild *>(handle.handle)->SetPrivateData(debug_object_name_guid, static_cast<UINT>(strlen(name)), name);
+}
+
 bool reshade::d3d10::device_impl::create_resource_view(api::resource resource, api::resource_usage usage_type, const api::resource_view_desc &desc, api::resource_view *out_handle)
 {
 	if (resource.handle == 0)
@@ -272,6 +319,59 @@ void reshade::d3d10::device_impl::destroy_resource_view(api::resource_view handl
 {
 	if (handle.handle != 0)
 		reinterpret_cast<IUnknown *>(handle.handle)->Release();
+}
+
+reshade::api::resource reshade::d3d10::device_impl::get_resource_from_view(api::resource_view view) const
+{
+	assert(view.handle != 0);
+
+	com_ptr<ID3D10Resource> resource;
+	reinterpret_cast<ID3D10View *>(view.handle)->GetResource(&resource);
+
+	return { reinterpret_cast<uintptr_t>(resource.get()) };
+}
+reshade::api::resource_view_desc reshade::d3d10::device_impl::get_resource_view_desc(api::resource_view view) const
+{
+	assert(view.handle != 0);
+
+	if (com_ptr<ID3D10RenderTargetView> object;
+		SUCCEEDED(reinterpret_cast<IUnknown *>(view.handle)->QueryInterface(&object)))
+	{
+		D3D10_RENDER_TARGET_VIEW_DESC internal_desc;
+		object->GetDesc(&internal_desc);
+		return convert_resource_view_desc(internal_desc);
+	}
+	if (com_ptr<ID3D10DepthStencilView> object;
+		SUCCEEDED(reinterpret_cast<IUnknown *>(view.handle)->QueryInterface(&object)))
+	{
+		D3D10_DEPTH_STENCIL_VIEW_DESC internal_desc;
+		object->GetDesc(&internal_desc);
+		return convert_resource_view_desc(internal_desc);
+	}
+	if (com_ptr<ID3D10ShaderResourceView1> object;
+		SUCCEEDED(reinterpret_cast<IUnknown *>(view.handle)->QueryInterface(&object)))
+	{
+		D3D10_SHADER_RESOURCE_VIEW_DESC1 internal_desc;
+		object->GetDesc1(&internal_desc);
+		return convert_resource_view_desc(internal_desc);
+	}
+	if (com_ptr<ID3D10ShaderResourceView> object;
+		SUCCEEDED(reinterpret_cast<IUnknown *>(view.handle)->QueryInterface(&object)))
+	{
+		D3D10_SHADER_RESOURCE_VIEW_DESC internal_desc;
+		object->GetDesc(&internal_desc);
+		return convert_resource_view_desc(internal_desc);
+	}
+
+	assert(false); // Not implemented
+	return api::resource_view_desc();
+}
+void reshade::d3d10::device_impl::set_resource_view_name(api::resource_view handle, const char *name)
+{
+	assert(handle.handle != 0);
+
+	constexpr GUID debug_object_name_guid = { 0x429b8c22, 0x9188, 0x4b0c, { 0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00} }; // WKPDID_D3DDebugObjectName
+	reinterpret_cast<ID3D10DeviceChild *>(handle.handle)->SetPrivateData(debug_object_name_guid, static_cast<UINT>(strlen(name)), name);
 }
 
 bool reshade::d3d10::device_impl::create_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle)
@@ -386,12 +486,12 @@ bool reshade::d3d10::device_impl::create_vertex_shader(const api::pipeline_desc 
 {
 	static_assert(alignof(ID3D10VertexShader) >= 2);
 
+	assert(desc.graphics.vertex_shader.entry_point == nullptr);
+	assert(desc.graphics.vertex_shader.spec_constants == 0);
+
 	if (com_ptr<ID3D10VertexShader> object;
 		SUCCEEDED(_orig->CreateVertexShader(desc.graphics.vertex_shader.code, desc.graphics.vertex_shader.code_size, &object)))
 	{
-		assert(desc.graphics.vertex_shader.entry_point == nullptr);
-		assert(desc.graphics.vertex_shader.spec_constants == 0);
-
 		*out_handle = { reinterpret_cast<uintptr_t>(object.release()) };
 		return true;
 	}
@@ -405,12 +505,12 @@ bool reshade::d3d10::device_impl::create_geometry_shader(const api::pipeline_des
 {
 	static_assert(alignof(ID3D10GeometryShader) >= 2);
 
+	assert(desc.graphics.geometry_shader.entry_point == nullptr);
+	assert(desc.graphics.geometry_shader.spec_constants == 0);
+
 	if (com_ptr<ID3D10GeometryShader> object;
 		SUCCEEDED(_orig->CreateGeometryShader(desc.graphics.geometry_shader.code, desc.graphics.geometry_shader.code_size, &object)))
 	{
-		assert(desc.graphics.geometry_shader.entry_point == nullptr);
-		assert(desc.graphics.geometry_shader.spec_constants == 0);
-
 		*out_handle = { reinterpret_cast<uintptr_t>(object.release()) };
 		return true;
 	}
@@ -424,12 +524,12 @@ bool reshade::d3d10::device_impl::create_pixel_shader(const api::pipeline_desc &
 {
 	static_assert(alignof(ID3D10PixelShader) >= 2);
 
+	assert(desc.graphics.pixel_shader.entry_point == nullptr);
+	assert(desc.graphics.pixel_shader.spec_constants == 0);
+
 	if (com_ptr<ID3D10PixelShader> object;
 		SUCCEEDED(_orig->CreatePixelShader(desc.graphics.pixel_shader.code, desc.graphics.pixel_shader.code_size, &object)))
 	{
-		assert(desc.graphics.pixel_shader.entry_point == nullptr);
-		assert(desc.graphics.pixel_shader.spec_constants == 0);
-
 		*out_handle = { reinterpret_cast<uintptr_t>(object.release()) };
 		return true;
 	}
@@ -504,24 +604,52 @@ void reshade::d3d10::device_impl::destroy_pipeline(api::pipeline handle)
 		reinterpret_cast<IUnknown *>(handle.handle)->Release();
 }
 
-bool reshade::d3d10::device_impl::create_render_pass(const api::render_pass_desc &, api::render_pass *out_handle)
+bool reshade::d3d10::device_impl::create_render_pass(uint32_t attachment_count, const api::attachment_desc *attachments, api::render_pass *out_handle)
 {
-	*out_handle = { 0 };
+	for (uint32_t a = 0; a < attachment_count; ++a)
+	{
+		if (attachments[a].index >= (attachments[a].type == api::attachment_type::color ? D3D10_SIMULTANEOUS_RENDER_TARGET_COUNT : 1u))
+		{
+			*out_handle = { 0 };
+			return false;
+		}
+	}
+
+	const auto impl = new render_pass_impl();
+	impl->attachments.assign(attachments, attachments + attachment_count);
+
+	*out_handle = { reinterpret_cast<uintptr_t>(impl) };
 	return true;
 }
 void reshade::d3d10::device_impl::destroy_render_pass(api::render_pass handle)
 {
-	assert(handle.handle == 0);
+	delete reinterpret_cast<render_pass_impl *>(handle.handle);
 }
 
-bool reshade::d3d10::device_impl::create_framebuffer(const api::framebuffer_desc &desc, api::framebuffer *out_handle)
+bool reshade::d3d10::device_impl::create_framebuffer(api::render_pass render_pass_template, uint32_t attachment_count, const api::resource_view *attachments, api::framebuffer *out_handle)
 {
+	const auto pass_impl = reinterpret_cast<render_pass_impl *>(render_pass_template.handle);
+
+	if (pass_impl == nullptr || attachment_count > pass_impl->attachments.size())
+	{
+		*out_handle = { 0 };
+		return false;
+	}
+
 	const auto impl = new framebuffer_impl();
 
-	for (UINT i = 0; i < D3D10_SIMULTANEOUS_RENDER_TARGET_COUNT && desc.render_targets[i].handle != 0; ++i, ++impl->count)
-		impl->rtv[i] = reinterpret_cast<ID3D10RenderTargetView *>(desc.render_targets[i].handle);
-
-	impl->dsv = reinterpret_cast<ID3D10DepthStencilView *>(desc.depth_stencil.handle);
+	for (uint32_t a = 0; a < attachment_count; ++a)
+	{
+		if (pass_impl->attachments[a].type == api::attachment_type::color)
+		{
+			impl->rtv[pass_impl->attachments[a].index] = reinterpret_cast<ID3D10RenderTargetView *>(attachments[a].handle);
+			impl->count = std::max(impl->count, pass_impl->attachments[a].index + 1);
+		}
+		else
+		{
+			impl->dsv = reinterpret_cast<ID3D10DepthStencilView *>(attachments[a].handle);
+		}
+	}
 
 	*out_handle = { reinterpret_cast<uintptr_t>(impl) };
 	return true;
@@ -531,26 +659,59 @@ void reshade::d3d10::device_impl::destroy_framebuffer(api::framebuffer handle)
 	delete reinterpret_cast<framebuffer_impl *>(handle.handle);
 }
 
+reshade::api::resource_view reshade::d3d10::device_impl::get_framebuffer_attachment(api::framebuffer fbo, api::attachment_type type, uint32_t index) const
+{
+	assert(fbo.handle != 0);
+
+	const auto fbo_impl = reinterpret_cast<const framebuffer_impl *>(fbo.handle);
+
+	if (type == api::attachment_type::color)
+	{
+		if (index < fbo_impl->count)
+		{
+			return { reinterpret_cast<uintptr_t>(fbo_impl->rtv[index]) };
+		}
+	}
+	else
+	{
+		if (fbo_impl->dsv != nullptr)
+		{
+			return { reinterpret_cast<uintptr_t>(fbo_impl->dsv) };
+		}
+	}
+
+	return { 0 };
+}
+
 bool reshade::d3d10::device_impl::create_pipeline_layout(uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout *out_handle)
 {
-	bool success = true;
-
 	const auto impl = new pipeline_layout_impl();
 	impl->params.assign(params, params + param_count);
 	impl->shader_registers.resize(param_count);
 
-	for (uint32_t i = 0; i < param_count && success; ++i)
+	bool success = true;
+
+	for (uint32_t i = 0; i < param_count; ++i)
 	{
 		if (params[i].type != api::pipeline_layout_param_type::push_constants)
 		{
 			const auto set_layout_impl = reinterpret_cast<const descriptor_set_layout_impl *>(params[i].descriptor_layout.handle);
+
+			if (set_layout_impl == nullptr)
+			{
+				success = false;
+				break;
+			}
 
 			impl->shader_registers[i] = set_layout_impl->range.dx_register_index;
 		}
 		else
 		{
 			if (params[i].push_constants.dx_register_space != 0)
+			{
 				success = false;
+				break;
+			}
 
 			impl->shader_registers[i] = params[i].push_constants.dx_register_index;
 		}
@@ -571,7 +732,45 @@ bool reshade::d3d10::device_impl::create_pipeline_layout(uint32_t param_count, c
 }
 void reshade::d3d10::device_impl::destroy_pipeline_layout(api::pipeline_layout handle)
 {
+	assert(handle != global_pipeline_layout);
+
 	delete reinterpret_cast<pipeline_layout_impl *>(handle.handle);
+}
+
+void reshade::d3d10::device_impl::get_pipeline_layout_params(api::pipeline_layout layout, uint32_t *count, api::pipeline_layout_param *params) const
+{
+	assert(layout.handle != 0 && count != nullptr);
+
+	if (layout == global_pipeline_layout)
+	{
+		if (params != nullptr)
+		{
+			*count = std::min(*count, 3u);
+			for (uint32_t i = 0; i < *count; ++i)
+			{
+				params[i].type = api::pipeline_layout_param_type::push_descriptors;
+				params[i].descriptor_layout = { 0xFFFFFFFFFFFFFFF0 + i };
+			}
+		}
+		else
+		{
+			*count = 3u;
+		}
+	}
+	else
+	{
+		const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
+
+		if (params != nullptr)
+		{
+			*count = std::min(*count, static_cast<uint32_t>(layout_impl->params.size()));
+			std::memcpy(params, layout_impl->params.data(), *count * sizeof(api::pipeline_layout_param));
+		}
+		else
+		{
+			*count = static_cast<uint32_t>(layout_impl->params.size());
+		}
+	}
 }
 
 bool reshade::d3d10::device_impl::create_descriptor_set_layout(uint32_t range_count, const api::descriptor_range *ranges, bool, api::descriptor_set_layout *out_handle)
@@ -628,6 +827,52 @@ void reshade::d3d10::device_impl::destroy_descriptor_set_layout(api::descriptor_
 	delete reinterpret_cast<descriptor_set_layout_impl *>(handle.handle);
 }
 
+void reshade::d3d10::device_impl::get_descriptor_set_layout_ranges(api::descriptor_set_layout layout, uint32_t *count, api::descriptor_range *ranges) const
+{
+	assert(layout.handle != 0 && count != nullptr);
+
+	if (ranges != nullptr && *count != 0)
+	{
+		if (layout.handle >= 0xFFFFFFFFFFFFFFF0)
+		{
+			ranges[0].offset = 0;
+			ranges[0].binding = 0;
+			ranges[0].dx_register_index = 0;
+			ranges[0].dx_register_space = 0;
+
+			switch (layout.handle - 0xFFFFFFFFFFFFFFF0)
+			{
+			case 0:
+				ranges[0].count = D3D10_COMMONSHADER_SAMPLER_SLOT_COUNT;
+				ranges[0].array_size = 1;
+				ranges[0].type = api::descriptor_type::sampler;
+				ranges[0].visibility = api::shader_stage::all;
+				break;
+			case 1:
+				ranges[0].count = D3D10_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
+				ranges[0].array_size = 1;
+				ranges[0].type = api::descriptor_type::shader_resource_view;
+				ranges[0].visibility = api::shader_stage::all;
+				break;
+			case 2:
+				ranges[0].count = D3D10_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
+				ranges[0].array_size = 1;
+				ranges[0].type = api::descriptor_type::constant_buffer;
+				ranges[0].visibility = api::shader_stage::all;
+				break;
+			}
+		}
+		else
+		{
+			const auto layout_impl = reinterpret_cast<descriptor_set_layout_impl *>(layout.handle);
+
+			ranges[0] = layout_impl->range;
+		}
+	}
+
+	*count = 1;
+}
+
 bool reshade::d3d10::device_impl::create_query_pool(api::query_type type, uint32_t size, api::query_pool *out_handle)
 {
 	const auto impl = new query_pool_impl();
@@ -636,7 +881,7 @@ bool reshade::d3d10::device_impl::create_query_pool(api::query_type type, uint32
 	D3D10_QUERY_DESC internal_desc = {};
 	internal_desc.Query = convert_query_type(type);
 
-	for (UINT i = 0; i < size; ++i)
+	for (uint32_t i = 0; i < size; ++i)
 	{
 		if (FAILED(_orig->CreateQuery(&internal_desc, &impl->queries[i])))
 		{
@@ -660,7 +905,12 @@ bool reshade::d3d10::device_impl::create_descriptor_sets(uint32_t count, const a
 	for (uint32_t i = 0; i < count; ++i)
 	{
 		const auto set_layout_impl = reinterpret_cast<const descriptor_set_layout_impl *>(layouts[i].handle);
-		assert(set_layout_impl != nullptr);
+
+		if (set_layout_impl == nullptr)
+		{
+			out_sets[i] = { 0 };
+			continue;
+		}
 
 		const auto impl = new descriptor_set_impl();
 		impl->type = set_layout_impl->range.type;
@@ -689,6 +939,12 @@ void reshade::d3d10::device_impl::destroy_descriptor_sets(uint32_t count, const 
 {
 	for (uint32_t i = 0; i < count; ++i)
 		delete reinterpret_cast<descriptor_set_impl *>(sets[i].handle);
+}
+
+void reshade::d3d10::device_impl::get_descriptor_pool_offset(api::descriptor_set, api::descriptor_pool *pool, uint32_t *offset) const
+{
+	*pool = { 0 };
+	*offset = 0; // Not implemented
 }
 
 bool reshade::d3d10::device_impl::map_buffer_region(api::resource resource, uint64_t offset, uint64_t, api::map_access access, void **out_data)
@@ -792,7 +1048,9 @@ void reshade::d3d10::device_impl::update_descriptor_sets(uint32_t count, const a
 {
 	for (uint32_t i = 0; i < count; ++i)
 	{
-		const auto impl = reinterpret_cast<descriptor_set_impl *>(updates[i].set.handle);
+		const auto set_impl = reinterpret_cast<descriptor_set_impl *>(updates[i].set.handle);
+
+		assert(set_impl != nullptr);
 
 		const api::descriptor_set_update &update = updates[i];
 
@@ -802,10 +1060,10 @@ void reshade::d3d10::device_impl::update_descriptor_sets(uint32_t count, const a
 		{
 		case api::descriptor_type::sampler:
 		case api::descriptor_type::shader_resource_view:
-			std::memcpy(&impl->descriptors[update.offset * 1], update.descriptors, update.count * sizeof(uint64_t) * 1);
+			std::memcpy(&set_impl->descriptors[update.offset * 1], update.descriptors, update.count * sizeof(uint64_t) * 1);
 			break;
 		case api::descriptor_type::constant_buffer:
-			std::memcpy(&impl->descriptors[update.offset * 3], update.descriptors, update.count * sizeof(uint64_t) * 3);
+			std::memcpy(&set_impl->descriptors[update.offset * 3], update.descriptors, update.count * sizeof(uint64_t) * 3);
 			break;
 		default:
 			assert(false);
@@ -827,177 +1085,4 @@ bool reshade::d3d10::device_impl::get_query_pool_results(api::query_pool pool, u
 	}
 
 	return true;
-}
-
-void reshade::d3d10::device_impl::set_resource_name(api::resource resource, const char *name)
-{
-	assert(resource.handle != 0);
-
-	constexpr GUID debug_object_name_guid = { 0x429b8c22, 0x9188, 0x4b0c, { 0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00} }; // WKPDID_D3DDebugObjectName
-	reinterpret_cast<ID3D10Resource *>(resource.handle)->SetPrivateData(debug_object_name_guid, static_cast<UINT>(strlen(name)), name);
-}
-
-void reshade::d3d10::device_impl::get_pipeline_layout_desc(api::pipeline_layout layout, uint32_t *count, api::pipeline_layout_param *params) const
-{
-	assert(layout.handle != 0 && count != nullptr);
-
-	if (layout == global_pipeline_layout)
-	{
-		if (params != nullptr)
-		{
-			*count = std::min(*count, 3u);
-			for (uint32_t i = 0; i < *count; ++i)
-			{
-				params[i].type = api::pipeline_layout_param_type::push_descriptors;
-				params[i].descriptor_layout = { 0xFFFFFFFFFFFFFFF0 + i };
-			}
-		}
-		else
-		{
-			*count = 3u;
-		}
-	}
-	else
-	{
-		const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
-
-		if (params != nullptr)
-		{
-			*count = std::min(*count, static_cast<uint32_t>(layout_impl->params.size()));
-			std::memcpy(params, layout_impl->params.data(), *count * sizeof(api::pipeline_layout_param));
-		}
-		else
-		{
-			*count = static_cast<uint32_t>(layout_impl->params.size());
-		}
-	}
-}
-
-void reshade::d3d10::device_impl::get_descriptor_pool_offset(api::descriptor_set, api::descriptor_pool *pool, uint32_t *offset) const
-{
-	*pool = { 0 };
-	*offset = 0; // Not implemented
-}
-
-void reshade::d3d10::device_impl::get_descriptor_set_layout_desc(api::descriptor_set_layout layout, uint32_t *count, api::descriptor_range *ranges) const
-{
-	assert(layout.handle != 0 && count != nullptr);
-
-	if (layout.handle >= 0xFFFFFFFFFFFFFFF0)
-	{
-		if (ranges != nullptr && *count != 0)
-		{
-			ranges[0].offset = 0;
-			ranges[0].binding = 0;
-			ranges[0].dx_register_index = 0;
-			ranges[0].dx_register_space = 0;
-
-			switch (layout.handle - 0xFFFFFFFFFFFFFFF0)
-			{
-			case 0:
-				ranges[0].count = D3D10_COMMONSHADER_SAMPLER_SLOT_COUNT;
-				ranges[0].array_size = 1;
-				ranges[0].type = api::descriptor_type::sampler;
-				ranges[0].visibility = api::shader_stage::all;
-				break;
-			case 1:
-				ranges[0].count = D3D10_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
-				ranges[0].array_size = 1;
-				ranges[0].type = api::descriptor_type::shader_resource_view;
-				ranges[0].visibility = api::shader_stage::all;
-				break;
-			case 2:
-				ranges[0].count = D3D10_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
-				ranges[0].array_size = 1;
-				ranges[0].type = api::descriptor_type::constant_buffer;
-				ranges[0].visibility = api::shader_stage::all;
-				break;
-			}
-		}
-	}
-	else
-	{
-		const auto layout_impl = reinterpret_cast<descriptor_set_layout_impl *>(layout.handle);
-
-		if (ranges != nullptr && *count != 0)
-		{
-			ranges[0] = layout_impl->range;
-		}
-	}
-
-	*count = 1;
-}
-
-reshade::api::resource_desc reshade::d3d10::device_impl::get_resource_desc(api::resource resource) const
-{
-	assert(resource.handle != 0);
-
-	const auto object = reinterpret_cast<ID3D10Resource *>(resource.handle);
-
-	D3D10_RESOURCE_DIMENSION dimension;
-	object->GetType(&dimension);
-	switch (dimension)
-	{
-		case D3D10_RESOURCE_DIMENSION_BUFFER:
-		{
-			D3D10_BUFFER_DESC internal_desc;
-			static_cast<ID3D10Buffer *>(object)->GetDesc(&internal_desc);
-			return convert_resource_desc(internal_desc);
-		}
-		case D3D10_RESOURCE_DIMENSION_TEXTURE1D:
-		{
-			D3D10_TEXTURE1D_DESC internal_desc;
-			static_cast<ID3D10Texture1D *>(object)->GetDesc(&internal_desc);
-			return convert_resource_desc(internal_desc);
-		}
-		case D3D10_RESOURCE_DIMENSION_TEXTURE2D:
-		{
-			D3D10_TEXTURE2D_DESC internal_desc;
-			static_cast<ID3D10Texture2D *>(object)->GetDesc(&internal_desc);
-			return convert_resource_desc(internal_desc);
-		}
-		case D3D10_RESOURCE_DIMENSION_TEXTURE3D:
-		{
-			D3D10_TEXTURE3D_DESC internal_desc;
-			static_cast<ID3D10Texture3D *>(object)->GetDesc(&internal_desc);
-			return convert_resource_desc(internal_desc);
-		}
-	}
-
-	assert(false); // Not implemented
-	return api::resource_desc {};
-}
-
-reshade::api::resource reshade::d3d10::device_impl::get_resource_from_view(api::resource_view view) const
-{
-	assert(view.handle != 0);
-
-	com_ptr<ID3D10Resource> resource;
-	reinterpret_cast<ID3D10View *>(view.handle)->GetResource(&resource);
-
-	return { reinterpret_cast<uintptr_t>(resource.get()) };
-}
-
-reshade::api::resource_view reshade::d3d10::device_impl::get_framebuffer_attachment(api::framebuffer fbo, api::attachment_type type, uint32_t index) const
-{
-	assert(fbo.handle != 0);
-
-	const auto fbo_impl = reinterpret_cast<const framebuffer_impl *>(fbo.handle);
-
-	if (type == api::attachment_type::color)
-	{
-		if (index < fbo_impl->count)
-		{
-			return { reinterpret_cast<uintptr_t>(fbo_impl->rtv[index]) };
-		}
-	}
-	else
-	{
-		if (fbo_impl->dsv != nullptr)
-		{
-			return { reinterpret_cast<uintptr_t>(fbo_impl->dsv) };
-		}
-	}
-
-	return { 0 };
 }

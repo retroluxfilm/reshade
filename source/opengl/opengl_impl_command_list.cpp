@@ -110,7 +110,7 @@ void reshade::opengl::pipeline_impl::apply_graphics() const
 	}
 }
 
-void reshade::opengl::device_impl::begin_render_pass(api::render_pass, api::framebuffer fbo)
+void reshade::opengl::device_impl::begin_render_pass(api::render_pass pass, api::framebuffer fbo, uint32_t clear_value_count, const void *clear_values)
 {
 	const GLuint fbo_object = fbo.handle & 0xFFFFFFFF;
 	const GLuint num_color_attachments = static_cast<uint32_t>(fbo.handle >> 40);
@@ -132,8 +132,38 @@ void reshade::opengl::device_impl::begin_render_pass(api::render_pass, api::fram
 	}
 
 	glEnableOrDisable(GL_FRAMEBUFFER_SRGB, (fbo.handle & 0x200000000) != 0);
+
+	if (clear_value_count == 0)
+		return;
+
+	assert(pass.handle != 0);
+
+	for (const api::attachment_desc &attach : reinterpret_cast<const render_pass_impl *>(pass.handle)->attachments)
+	{
+		if (attach.type == api::attachment_type::color)
+		{
+			if (attach.color_or_depth_load_op == api::attachment_load_op::clear)
+			{
+				glClearBufferfv(GL_COLOR, attach.index, static_cast<const float *>(clear_values));
+			}
+		}
+		else
+		{
+			if (attach.color_or_depth_load_op == api::attachment_load_op::clear)
+			{
+				glClearBufferfv(GL_DEPTH, 0, &static_cast<const float *>(clear_values)[0]);
+			}
+			if (attach.stencil_load_op == api::attachment_load_op::clear)
+			{
+				glClearBufferuiv(GL_STENCIL, 0, reinterpret_cast<const uint32_t *>(&static_cast<const float *>(clear_values)[1]));
+			}
+		}
+
+		clear_values = static_cast<const float *>(clear_values) + 4;
+		clear_value_count--;
+	}
 }
-void reshade::opengl::device_impl::finish_render_pass()
+void reshade::opengl::device_impl::end_render_pass()
 {
 }
 void reshade::opengl::device_impl::bind_render_targets_and_depth_stencil(uint32_t, const api::resource_view *, api::resource_view)
@@ -249,7 +279,7 @@ void reshade::opengl::device_impl::bind_scissor_rects(uint32_t first, uint32_t c
 
 void reshade::opengl::device_impl::push_constants(api::shader_stage, api::pipeline_layout layout, uint32_t layout_param, uint32_t first, uint32_t count, const void *values)
 {
-	const GLuint push_constants_binding = layout.handle != 0 ?
+	const GLuint push_constants_binding = (layout.handle != 0 && layout != global_pipeline_layout) ?
 		reinterpret_cast<pipeline_layout_impl *>(layout.handle)->bindings[layout_param] : 0;
 
 	// Binds the push constant buffer to the requested indexed binding point as well as the generic binding point
@@ -279,7 +309,7 @@ void reshade::opengl::device_impl::push_descriptors(api::shader_stage, api::pipe
 	assert(update.set.handle == 0 && update.array_offset == 0);
 
 	uint32_t first = update.binding;
-	if (layout.handle != 0)
+	if (layout.handle != 0 && layout != global_pipeline_layout)
 		first += reinterpret_cast<pipeline_layout_impl *>(layout.handle)->bindings[layout_param];
 
 	switch (update.type)
@@ -1136,7 +1166,7 @@ void reshade::opengl::device_impl::begin_query(api::query_pool pool, api::query_
 
 	glBeginQuery(convert_query_type(type), reinterpret_cast<query_pool_impl *>(pool.handle)->queries[index]);
 }
-void reshade::opengl::device_impl::finish_query(api::query_pool pool, api::query_type type, uint32_t index)
+void reshade::opengl::device_impl::end_query(api::query_pool pool, api::query_type type, uint32_t index)
 {
 	assert(pool.handle != 0);
 
@@ -1165,7 +1195,7 @@ void reshade::opengl::device_impl::begin_debug_event(const char *label, const fl
 {
 	glPushDebugGroup(GL_DEBUG_SOURCE_THIRD_PARTY, 0, -1, label);
 }
-void reshade::opengl::device_impl::finish_debug_event()
+void reshade::opengl::device_impl::end_debug_event()
 {
 	glPopDebugGroup();
 }

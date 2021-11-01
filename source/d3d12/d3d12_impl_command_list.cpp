@@ -78,9 +78,9 @@ void reshade::d3d12::command_list_impl::barrier(uint32_t count, const api::resou
 	_freea(barriers);
 }
 
-void reshade::d3d12::command_list_impl::begin_render_pass(api::render_pass, api::framebuffer fbo)
+void reshade::d3d12::command_list_impl::begin_render_pass(api::render_pass pass, api::framebuffer fbo, uint32_t clear_value_count, const void *clear_values)
 {
-	assert(fbo.handle != 0);
+	assert(pass.handle != 0 && fbo.handle != 0);
 
 	const auto fbo_impl = reinterpret_cast<const framebuffer_impl *>(fbo.handle);
 
@@ -88,8 +88,38 @@ void reshade::d3d12::command_list_impl::begin_render_pass(api::render_pass, api:
 	_orig->OMSetRenderTargets(fbo_impl->count, fbo_impl->rtv, fbo_impl->rtv_is_single_handle_to_range, fbo_impl->dsv.ptr != 0 ? &fbo_impl->dsv : nullptr);
 
 	std::memcpy(_current_fbo, fbo_impl, sizeof(framebuffer_impl));
+
+	if (clear_value_count == 0)
+		return;
+
+	for (const api::attachment_desc &attach : reinterpret_cast<const render_pass_impl *>(pass.handle)->attachments)
+	{
+		if (attach.type == api::attachment_type::color)
+		{
+			if (attach.color_or_depth_load_op == api::attachment_load_op::clear)
+			{
+				assert(clear_value_count != 0);
+
+				_orig->ClearRenderTargetView(fbo_impl->rtv[attach.index], static_cast<const float *>(clear_values), 0, nullptr);
+			}
+		}
+		else
+		{
+			if (const UINT clear_flags = ((attach.color_or_depth_load_op == api::attachment_load_op::clear) ? D3D12_CLEAR_FLAG_DEPTH : 0) | ((attach.stencil_load_op == api::attachment_load_op::clear) ? D3D12_CLEAR_FLAG_STENCIL : 0))
+			{
+				assert(clear_value_count != 0);
+
+				_orig->ClearDepthStencilView(fbo_impl->dsv, static_cast<D3D12_CLEAR_FLAGS>(clear_flags),
+					static_cast<const float *>(clear_values)[0],
+					reinterpret_cast<const uint32_t &>(static_cast<const float *>(clear_values)[1]) & 0xFF, 0, nullptr);
+			}
+		}
+
+		clear_values = static_cast<const float *>(clear_values) + 4;
+		clear_value_count--;
+	}
 }
-void reshade::d3d12::command_list_impl::finish_render_pass()
+void reshade::d3d12::command_list_impl::end_render_pass()
 {
 	_current_fbo->count = 0;
 	_current_fbo->dsv.ptr = 0;
@@ -704,7 +734,7 @@ void reshade::d3d12::command_list_impl::begin_query(api::query_pool pool, api::q
 
 	_orig->BeginQuery(reinterpret_cast<ID3D12QueryHeap *>(pool.handle), convert_query_type(type), index);
 }
-void reshade::d3d12::command_list_impl::finish_query(api::query_pool pool, api::query_type type, uint32_t index)
+void reshade::d3d12::command_list_impl::end_query(api::query_pool pool, api::query_type type, uint32_t index)
 {
 	_has_commands = true;
 
@@ -743,7 +773,7 @@ void reshade::d3d12::command_list_impl::begin_debug_event(const char *label, con
 	_orig->BeginEvent(2, pix3blob, sizeof(pix3blob));
 #endif
 }
-void reshade::d3d12::command_list_impl::finish_debug_event()
+void reshade::d3d12::command_list_impl::end_debug_event()
 {
 	_orig->EndEvent();
 }

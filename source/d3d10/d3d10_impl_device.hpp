@@ -30,8 +30,15 @@ namespace reshade::d3d10
 		bool create_resource(const api::resource_desc &desc, const api::subresource_data *initial_data, api::resource_usage initial_state, api::resource *out_handle) final;
 		void destroy_resource(api::resource handle) final;
 
+		api::resource_desc get_resource_desc(api::resource resource) const final;
+		void set_resource_name(api::resource handle, const char *name) final;
+
 		bool create_resource_view(api::resource resource, api::resource_usage usage_type, const api::resource_view_desc &desc, api::resource_view *out_handle) final;
 		void destroy_resource_view(api::resource_view handle) final;
+
+		api::resource get_resource_from_view(api::resource_view view) const final;
+		api::resource_view_desc get_resource_view_desc(api::resource_view view) const final;
+		void set_resource_view_name(api::resource_view handle, const char *name) final;
 
 		bool create_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle) final;
 		bool create_graphics_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle);
@@ -44,23 +51,31 @@ namespace reshade::d3d10
 		bool create_depth_stencil_state(const api::pipeline_desc &desc, api::pipeline *out_handle);
 		void destroy_pipeline(api::pipeline handle) final;
 
-		bool create_render_pass(const api::render_pass_desc &desc, api::render_pass *out_handle) final;
+		bool create_render_pass(uint32_t attachment_count, const api::attachment_desc *attachments, api::render_pass *out_handle) final;
 		void destroy_render_pass(api::render_pass handle) final;
 
-		bool create_framebuffer(const api::framebuffer_desc &desc, api::framebuffer *out_handle) final;
+		bool create_framebuffer(api::render_pass render_pass_template, uint32_t attachment_count, const api::resource_view *attachments, api::framebuffer *out_handle) final;
 		void destroy_framebuffer(api::framebuffer handle) final;
+
+		api::resource_view get_framebuffer_attachment(api::framebuffer framebuffer, api::attachment_type type, uint32_t index) const final;
 
 		bool create_pipeline_layout(uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout *out_handle) final;
 		void destroy_pipeline_layout(api::pipeline_layout handle) final;
 
+		void get_pipeline_layout_params(api::pipeline_layout layout, uint32_t *out_count, api::pipeline_layout_param *out_params) const final;
+
 		bool create_descriptor_set_layout(uint32_t range_count, const api::descriptor_range *ranges, bool push_descriptors, api::descriptor_set_layout *out_handle) final;
 		void destroy_descriptor_set_layout(api::descriptor_set_layout handle) final;
+
+		void get_descriptor_set_layout_ranges(api::descriptor_set_layout layout, uint32_t *out_count, api::descriptor_range *out_ranges) const final;
 
 		bool create_query_pool(api::query_type type, uint32_t size, api::query_pool *out_handle) final;
 		void destroy_query_pool(api::query_pool handle) final;
 
 		bool create_descriptor_sets(uint32_t count, const api::descriptor_set_layout *layouts, api::descriptor_set *out_sets) final;
 		void destroy_descriptor_sets(uint32_t count, const api::descriptor_set *sets) final;
+
+		void get_descriptor_pool_offset(api::descriptor_set set, api::descriptor_pool *out_pool, uint32_t *offset) const final;
 
 		bool map_buffer_region(api::resource resource, uint64_t offset, uint64_t size, api::map_access access, void **out_data) final;
 		void unmap_buffer_region(api::resource resource) final;
@@ -76,20 +91,6 @@ namespace reshade::d3d10
 
 		void wait_idle() const final { /* no-op */ }
 
-		void set_resource_name(api::resource resource, const char *name) final;
-
-		void get_pipeline_layout_desc(api::pipeline_layout layout, uint32_t *out_count, api::pipeline_layout_param *out_params) const final;
-
-		void get_descriptor_pool_offset(api::descriptor_set set, api::descriptor_pool *out_pool, uint32_t *offset) const final;
-
-		void get_descriptor_set_layout_desc(api::descriptor_set_layout layout, uint32_t *out_count, api::descriptor_range *out_ranges) const final;
-
-		api::resource_desc get_resource_desc(api::resource resource) const final;
-
-		api::resource get_resource_from_view(api::resource_view view) const final;
-
-		api::resource_view get_framebuffer_attachment(api::framebuffer framebuffer, api::attachment_type type, uint32_t index) const final;
-
 		api::device *get_device() final { return this; }
 
 		api::command_list *get_immediate_command_list() final { return this; }
@@ -98,8 +99,8 @@ namespace reshade::d3d10
 
 		void barrier(uint32_t count, const api::resource *resources, const api::resource_usage *old_states, const api::resource_usage *new_states) final;
 
-		void begin_render_pass(api::render_pass pass, api::framebuffer framebuffer) final;
-		void finish_render_pass() final;
+		void begin_render_pass(api::render_pass pass, api::framebuffer framebuffer, uint32_t clear_value_count, const void *clear_values) final;
+		void end_render_pass() final;
 		void bind_render_targets_and_depth_stencil(uint32_t count, const api::resource_view *rtvs, api::resource_view dsv) final;
 
 		void bind_pipeline(api::pipeline_stage type, api::pipeline pipeline) final;
@@ -139,11 +140,11 @@ namespace reshade::d3d10
 		void generate_mipmaps(api::resource_view srv) final;
 
 		void begin_query(api::query_pool pool, api::query_type type, uint32_t index) final;
-		void finish_query(api::query_pool pool, api::query_type type, uint32_t index) final;
+		void end_query(api::query_pool pool, api::query_type type, uint32_t index) final;
 		void copy_query_pool_results(api::query_pool pool, api::query_type type, uint32_t first, uint32_t count, api::resource dest, uint64_t dest_offset, uint32_t stride) final;
 
 		void begin_debug_event(const char *, const float[4]) final {}
-		void finish_debug_event() final {}
+		void end_debug_event() final {}
 		void insert_debug_marker(const char *, const float[4]) final {}
 
 	private:

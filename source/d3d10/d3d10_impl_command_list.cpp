@@ -41,15 +41,45 @@ void reshade::d3d10::device_impl::barrier(uint32_t count, const api::resource *,
 	}
 }
 
-void reshade::d3d10::device_impl::begin_render_pass(api::render_pass, api::framebuffer fbo)
+void reshade::d3d10::device_impl::begin_render_pass(api::render_pass pass, api::framebuffer fbo, uint32_t clear_value_count, const void *clear_values)
 {
-	assert(fbo.handle != 0);
+	assert(pass.handle != 0 && fbo.handle != 0);
 
 	const auto fbo_impl = reinterpret_cast<const framebuffer_impl *>(fbo.handle);
 
 	_orig->OMSetRenderTargets(fbo_impl->count, fbo_impl->rtv, fbo_impl->dsv);
+
+	if (clear_value_count == 0)
+		return;
+
+	for (const api::attachment_desc &attach : reinterpret_cast<const render_pass_impl *>(pass.handle)->attachments)
+	{
+		if (attach.type == api::attachment_type::color)
+		{
+			if (attach.color_or_depth_load_op == api::attachment_load_op::clear)
+			{
+				assert(clear_value_count != 0);
+
+				_orig->ClearRenderTargetView(fbo_impl->rtv[attach.index], static_cast<const float *>(clear_values));
+			}
+		}
+		else
+		{
+			if (const UINT clear_flags = ((attach.color_or_depth_load_op == api::attachment_load_op::clear) ? D3D10_CLEAR_DEPTH : 0) | ((attach.stencil_load_op == api::attachment_load_op::clear) ? D3D10_CLEAR_STENCIL : 0))
+			{
+				assert(clear_value_count != 0);
+
+				_orig->ClearDepthStencilView(fbo_impl->dsv, clear_flags,
+					static_cast<const float *>(clear_values)[0],
+					reinterpret_cast<const uint32_t &>(static_cast<const float *>(clear_values)[1]) & 0xFF);
+			}
+		}
+
+		clear_values = static_cast<const float *>(clear_values) + 4;
+		clear_value_count--;
+	}
 }
-void reshade::d3d10::device_impl::finish_render_pass()
+void reshade::d3d10::device_impl::end_render_pass()
 {
 	// Reset render targets
 	_orig->OMSetRenderTargets(0, nullptr, nullptr);
@@ -262,7 +292,7 @@ void reshade::d3d10::device_impl::push_constants(api::shader_stage stages, api::
 		push_constants->Unmap();
 	}
 
-	const UINT push_constants_slot = layout.handle != 0 ?
+	const UINT push_constants_slot = (layout.handle != 0 && layout != global_pipeline_layout) ?
 		reinterpret_cast<pipeline_layout_impl *>(layout.handle)->shader_registers[layout_param] : 0;
 
 	if ((stages & api::shader_stage::vertex) == api::shader_stage::vertex)
@@ -277,7 +307,7 @@ void reshade::d3d10::device_impl::push_descriptors(api::shader_stage stages, api
 	assert(update.set.handle == 0);
 
 	uint32_t first = update.offset;
-	if (layout.handle != 0)
+	if (layout.handle != 0 && layout != global_pipeline_layout)
 		first += reinterpret_cast<pipeline_layout_impl *>(layout.handle)->shader_registers[layout_param];
 
 	switch (update.type)
@@ -371,7 +401,7 @@ void reshade::d3d10::device_impl::copy_buffer_region(api::resource src, uint64_t
 	{
 		D3D10_BUFFER_DESC desc;
 		reinterpret_cast<ID3D10Buffer *>(src.handle)->GetDesc(&desc);
-		size  = desc.ByteWidth;
+		size = desc.ByteWidth;
 	}
 
 	assert(src_offset <= std::numeric_limits<UINT>::max() && dst_offset <= std::numeric_limits<UINT>::max() && size <= std::numeric_limits<UINT>::max());
@@ -414,7 +444,7 @@ void reshade::d3d10::device_impl::resolve_texture_region(api::resource src, uint
 
 void reshade::d3d10::device_impl::clear_attachments(api::attachment_type clear_flags, const float color[4], float depth, uint8_t stencil, uint32_t rect_count, const int32_t *)
 {
-	assert(rect_count == 0);
+	assert(rect_count == 0); // Clearing rectangles is not supported
 
 	com_ptr<ID3D10DepthStencilView> dsv;
 	com_ptr<ID3D10RenderTargetView> rtv[D3D10_SIMULTANEOUS_RENDER_TARGET_COUNT];
@@ -428,13 +458,13 @@ void reshade::d3d10::device_impl::clear_attachments(api::attachment_type clear_f
 }
 void reshade::d3d10::device_impl::clear_depth_stencil_view(api::resource_view dsv, api::attachment_type clear_flags, float depth, uint8_t stencil, uint32_t rect_count, const int32_t *)
 {
-	assert(dsv.handle != 0 && rect_count == 0);
+	assert(dsv.handle != 0 && rect_count == 0); // Clearing rectangles is not supported
 
 	_orig->ClearDepthStencilView(reinterpret_cast<ID3D10DepthStencilView *>(dsv.handle), static_cast<UINT>(clear_flags) >> 1, depth, stencil);
 }
 void reshade::d3d10::device_impl::clear_render_target_view(api::resource_view rtv, const float color[4], uint32_t rect_count, const int32_t *)
 {
-	assert(rtv.handle != 0 && rect_count == 0);
+	assert(rtv.handle != 0 && rect_count == 0); // Clearing rectangles is not supported
 
 	_orig->ClearRenderTargetView(reinterpret_cast<ID3D10RenderTargetView *>(rtv.handle), color);
 }
@@ -460,7 +490,7 @@ void reshade::d3d10::device_impl::begin_query(api::query_pool pool, api::query_t
 
 	reinterpret_cast<query_pool_impl *>(pool.handle)->queries[index]->Begin();
 }
-void reshade::d3d10::device_impl::finish_query(api::query_pool pool, api::query_type, uint32_t index)
+void reshade::d3d10::device_impl::end_query(api::query_pool pool, api::query_type, uint32_t index)
 {
 	assert(pool.handle != 0);
 

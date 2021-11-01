@@ -98,7 +98,7 @@ void reshade::vulkan::command_list_impl::barrier(uint32_t count, const api::reso
 	_freea(image_barriers);
 }
 
-void reshade::vulkan::command_list_impl::begin_render_pass(api::render_pass pass, api::framebuffer fbo)
+void reshade::vulkan::command_list_impl::begin_render_pass(api::render_pass pass, api::framebuffer fbo, uint32_t clear_value_count, const void *clear_values)
 {
 	_has_commands = true;
 
@@ -108,12 +108,14 @@ void reshade::vulkan::command_list_impl::begin_render_pass(api::render_pass pass
 	begin_info.renderPass = (VkRenderPass)pass.handle;
 	begin_info.framebuffer = (VkFramebuffer)fbo.handle;
 	begin_info.renderArea.extent = _device_impl->get_user_data_for_object<VK_OBJECT_TYPE_FRAMEBUFFER>(begin_info.framebuffer)->area;
+	begin_info.clearValueCount = clear_value_count;
+	begin_info.pClearValues = static_cast<const VkClearValue *>(clear_values);
 
 	vk.CmdBeginRenderPass(_orig, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
 	_current_fbo = begin_info.framebuffer;
 }
-void reshade::vulkan::command_list_impl::finish_render_pass()
+void reshade::vulkan::command_list_impl::end_render_pass()
 {
 	vk.CmdEndRenderPass(_orig);
 
@@ -835,7 +837,7 @@ void reshade::vulkan::command_list_impl::begin_query(api::query_pool pool, api::
 	vk.CmdResetQueryPool(_orig, (VkQueryPool)pool.handle, index, 1);
 	vk.CmdBeginQuery(_orig, (VkQueryPool)pool.handle, index, 0);
 }
-void reshade::vulkan::command_list_impl::finish_query(api::query_pool pool, api::query_type type, uint32_t index)
+void reshade::vulkan::command_list_impl::end_query(api::query_pool pool, api::query_type type, uint32_t index)
 {
 	_has_commands = true;
 
@@ -879,7 +881,7 @@ void reshade::vulkan::command_list_impl::begin_debug_event(const char *label, co
 
 	vk.CmdBeginDebugUtilsLabelEXT(_orig, &label_info);
 }
-void reshade::vulkan::command_list_impl::finish_debug_event()
+void reshade::vulkan::command_list_impl::end_debug_event()
 {
 	if (vk.CmdEndDebugUtilsLabelEXT == nullptr)
 		return;

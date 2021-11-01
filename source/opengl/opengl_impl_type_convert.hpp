@@ -65,6 +65,11 @@ namespace reshade::opengl
 		GLuint patch_vertices;
 	};
 
+	struct render_pass_impl
+	{
+		std::vector<api::attachment_desc> attachments;
+	};
+
 	struct pipeline_layout_impl
 	{
 		std::vector<GLuint> bindings;
@@ -88,6 +93,8 @@ namespace reshade::opengl
 		std::vector<uint64_t> descriptors;
 	};
 
+	constexpr api::pipeline_layout global_pipeline_layout = { 0xFFFFFFFFFFFFFFFF };
+
 	auto convert_format(api::format format, GLint swizzle_mask[4] = nullptr) -> GLenum;
 	auto convert_format(GLenum internal_format, const GLint swizzle_mask[4] = nullptr) -> api::format;
 	auto convert_format(GLenum format, GLenum type) -> api::format;
@@ -110,7 +117,7 @@ namespace reshade::opengl
 
 	api::resource_view_type convert_resource_view_type(GLenum target);
 	api::resource_view_desc convert_resource_view_desc(GLenum target, GLenum internal_format, GLintptr offset, GLsizeiptr size);
-	api::resource_view_desc convert_resource_view_desc(GLenum target, GLenum internal_format, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers);
+	api::resource_view_desc convert_resource_view_desc(GLenum target, GLenum internal_format, GLuint min_level, GLuint num_levels, GLuint min_layer, GLuint num_layers);
 
 	GLuint get_index_type_size(GLenum index_type);
 
