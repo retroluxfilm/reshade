@@ -694,7 +694,7 @@ bool reshade::opengl::device_impl::create_resource_view(api::resource resource, 
 	const GLenum resource_target = resource.handle >> 40;
 	if (resource_target == GL_RENDERBUFFER || resource_target == GL_FRAMEBUFFER_DEFAULT)
 	{
-		*out_handle = make_resource_view_handle(resource_target, resource.handle & 0xFFFFFFFF, 0x1 | (is_srgb_format ? 0x2 : 0));
+		*out_handle = make_resource_view_handle(resource_target, resource.handle & 0xFFFFFFFF, is_srgb_format ? 0x2 : 0);
 		return true;
 	}
 
@@ -767,13 +767,13 @@ bool reshade::opengl::device_impl::create_resource_view(api::resource resource, 
 		assert(target != GL_TEXTURE_BUFFER);
 
 		// No need to create a view, so use resource directly, but set a bit so to not destroy it twice via 'destroy_resource_view'
-		*out_handle = make_resource_view_handle(target, resource.handle & 0xFFFFFFFF, 0x1 | (is_srgb_format ? 0x2 : 0));
+		*out_handle = make_resource_view_handle(target, resource.handle & 0xFFFFFFFF, is_srgb_format ? 0x2 : 0);
 		return true;
 	}
 	else if (resource_target == GL_TEXTURE_CUBE_MAP && target == GL_TEXTURE_2D && desc.texture.layer_count == 1)
 	{
 		// Cube map face is handled via special target
-		*out_handle = make_resource_view_handle(GL_TEXTURE_CUBE_MAP_POSITIVE_X + desc.texture.first_layer, resource.handle & 0xFFFFFFFF, 0x1);
+		*out_handle = make_resource_view_handle(GL_TEXTURE_CUBE_MAP_POSITIVE_X + desc.texture.first_layer, resource.handle & 0xFFFFFFFF, is_srgb_format ? 0x2 : 0);
 		return true;
 	}
 
@@ -824,12 +824,12 @@ bool reshade::opengl::device_impl::create_resource_view(api::resource resource, 
 		return false;
 	}
 
-	*out_handle = make_resource_view_handle(target, object, is_srgb_format ? 0x2 : 0);
+	*out_handle = make_resource_view_handle(target, object, 0x1 | (is_srgb_format ? 0x2 : 0));
 	return true;
 }
 void reshade::opengl::device_impl::destroy_resource_view(api::resource_view handle)
 {
-	if (((handle.handle >> 32) & 0x1) == 0)
+	if (((handle.handle >> 32) & 0x1) != 0)
 		destroy_resource({ handle.handle });
 }
 
@@ -849,7 +849,7 @@ reshade::api::resource_view_desc reshade::opengl::device_impl::get_resource_view
 
 	if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X && target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z)
 		return api::resource_view_desc(get_resource_desc(get_resource_from_view(view)).texture.format, 0, 0xFFFFFFFF, target - GL_TEXTURE_CUBE_MAP_POSITIVE_X, 1);
-	if (((view.handle >> 32) & 0x1) != 0)
+	if (((view.handle >> 32) & 0x1) == 0)
 		return api::resource_view_desc(get_resource_desc(get_resource_from_view(view)).texture.format, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF);
 
 	if (target != GL_TEXTURE_BUFFER)
@@ -909,7 +909,7 @@ reshade::api::resource_view_desc reshade::opengl::device_impl::get_resource_view
 }
 void reshade::opengl::device_impl::set_resource_view_name(api::resource_view handle, const char *name)
 {
-	if (((handle.handle >> 32) & 0x1) != 0)
+	if (((handle.handle >> 32) & 0x1) == 0)
 		return;
 
 	glObjectLabel(GL_TEXTURE, handle.handle & 0xFFFFFFFF, -1, name);
@@ -1299,7 +1299,7 @@ bool reshade::opengl::device_impl::create_framebuffer(api::render_pass render_pa
 			return false;
 		}
 
-		if (attachments[i].handle & 0x200000000)
+		if ((attachments[i].handle >> 32) & 0x2)
 			has_srgb_attachment = true;
 	}
 
@@ -1349,12 +1349,15 @@ reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attach
 		}
 	}
 
+	const bool has_srgb_attachment = ((fbo.handle >> 32) & 0x2) != 0;
+	const uint32_t num_color_attachments = (fbo.handle >> 40);
+
 	GLenum attachment = GL_NONE;
 	switch (type)
 	{
 	case api::attachment_type::color:
 		attachment = GL_COLOR_ATTACHMENT0 + index;
-		if (index >= (fbo.handle >> 40))
+		if (index >= num_color_attachments)
 		{
 			return make_resource_view_handle(0, 0);
 		}
@@ -1390,8 +1393,6 @@ reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attach
 			// Get actual texture target from the texture object
 			if (target == GL_TEXTURE)
 				glGetTextureParameteriv(object, GL_TEXTURE_TARGET, reinterpret_cast<GLint *>(&target));
-
-			return make_resource_view_handle(target, object);
 		}
 	}
 	else
@@ -1411,7 +1412,7 @@ reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attach
 	}
 
 	// TODO: Create view based on 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL', 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE' and 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER'
-	return make_resource_view_handle(target, object);
+	return make_resource_view_handle(target, object, type == api::attachment_type::color && has_srgb_attachment ? 0x2 : 0);
 }
 
 bool reshade::opengl::device_impl::create_pipeline_layout(uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout *out_handle)
@@ -1468,62 +1469,58 @@ void reshade::opengl::device_impl::destroy_pipeline_layout(api::pipeline_layout 
 	delete reinterpret_cast<pipeline_layout_impl *>(handle.handle);
 }
 
-void reshade::opengl::device_impl::get_pipeline_layout_params(api::pipeline_layout layout, uint32_t *count, api::pipeline_layout_param *params) const
+reshade::api::pipeline_layout_param reshade::opengl::device_impl::get_pipeline_layout_param(api::pipeline_layout layout, uint32_t index) const
 {
-	assert(layout.handle != 0 && count != nullptr);
+	assert(layout.handle != 0);
+
+	api::pipeline_layout_param param = {};
 
 	if (layout == global_pipeline_layout)
 	{
-		*count = std::min(*count, 6u);
+		switch (index)
+		{
+		case 0:
+			param.type = api::pipeline_layout_param_type::push_descriptors;
+			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF0 };
+			break;
+		case 1:
+			param.type = api::pipeline_layout_param_type::push_descriptors;
+			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF1 };
+			break;
+		case 2:
+			param.type = api::pipeline_layout_param_type::push_descriptors;
+			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF2 };
+			break;
+		case 3:
+			param.type = api::pipeline_layout_param_type::push_descriptors;
+			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF3 };
+			break;
 
-		if (*count > 0)
-		{
-			params[0].type = api::pipeline_layout_param_type::push_descriptors;
-			params[0].descriptor_layout = { 0xFFFFFFFFFFFFFFF0 };
-		}
-		if (*count > 1)
-		{
-			params[1].type = api::pipeline_layout_param_type::push_descriptors;
-			params[1].descriptor_layout = { 0xFFFFFFFFFFFFFFF1 };
-		}
-		if (*count > 2)
-		{
-			params[2].type = api::pipeline_layout_param_type::push_descriptors;
-			params[2].descriptor_layout = { 0xFFFFFFFFFFFFFFF2 };
-		}
-		if (*count > 3)
-		{
-			params[3].type = api::pipeline_layout_param_type::push_descriptors;
-			params[3].descriptor_layout = { 0xFFFFFFFFFFFFFFF3 };
-		}
+		case 4:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = std::numeric_limits<uint32_t>::max();
+			param.push_constants.visibility = api::shader_stage::all;
+			break;
+		case 5:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = std::numeric_limits<uint32_t>::max();
+			param.push_constants.visibility = api::shader_stage::all;
+			break;
 
-		if (*count > 4)
-		{
-			params[4].type = api::pipeline_layout_param_type::push_constants;
-			params[4].push_constants.count = std::numeric_limits<uint32_t>::max();
-			params[4].push_constants.visibility = api::shader_stage::all;
-		}
-		if (*count > 5)
-		{
-			params[5].type = api::pipeline_layout_param_type::push_constants;
-			params[5].push_constants.count = std::numeric_limits<uint32_t>::max();
-			params[5].push_constants.visibility = api::shader_stage::all;
+		default:
+			assert(false);
+			break;
 		}
 	}
 	else
 	{
 		const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
 
-		if (params != nullptr)
-		{
-			*count = std::min(*count, static_cast<uint32_t>(layout_impl->params.size()));
-			std::memcpy(params, layout_impl->params.data(), *count * sizeof(api::pipeline_layout_param));
-		}
-		else
-		{
-			*count = static_cast<uint32_t>(layout_impl->params.size());
-		}
+		if (index < layout_impl->params.size())
+			param = layout_impl->params[index];
 	}
+
+	return param;
 }
 
 bool reshade::opengl::device_impl::create_descriptor_set_layout(uint32_t range_count, const api::descriptor_range *ranges, bool, api::descriptor_set_layout *out_handle)

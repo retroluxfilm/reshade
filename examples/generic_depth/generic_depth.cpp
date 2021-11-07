@@ -648,7 +648,7 @@ static void on_present(command_queue *, swapchain *swapchain)
 	device_state.destroyed_resources.clear();
 }
 
-static void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_list)
+static void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_list, resource_view, resource_view)
 {
 	device *const device = runtime->get_device();
 	const state_tracking_context &device_state = device->get_private_data<state_tracking_context>(state_tracking_context::GUID);
@@ -667,7 +667,7 @@ static void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_l
 		}
 	}
 }
-static void on_finish_render_effects(effect_runtime *runtime, command_list *cmd_list)
+static void on_finish_render_effects(effect_runtime *runtime, command_list *cmd_list, resource_view, resource_view)
 {
 	device *const device = runtime->get_device();
 	const state_tracking_context &device_state = device->get_private_data<state_tracking_context>(state_tracking_context::GUID);
@@ -886,7 +886,7 @@ void unregister_addon_depth()
 	reshade::unregister_event<reshade::addon_event::reshade_reloaded_effects>(update_effect_runtime);
 }
 
-#ifdef _WINDLL
+#ifndef BUILTIN_ADDON
 
 extern "C" __declspec(dllexport) const char *NAME = "Generic Depth";
 extern "C" __declspec(dllexport) const char *DESCRIPTION = "Automatic depth buffer detection that works in the majority of games.";

@@ -120,12 +120,6 @@ bool reshade::d3d9::device_impl::on_init(const D3DPRESENT_PARAMETERS &pp)
 		return false;
 	}
 
-	if (!_backup_state.init_state_block())
-	{
-		LOG(ERROR) << "Failed to create backup state block!";
-		return false;
-	}
-
 	// Create input layout for vertex buffer which holds vertex indices
 	{
 		const UINT max_vertices = 100; // TODO: Make this configurable or automatically resize when encountering larger draw calls
@@ -183,21 +177,22 @@ bool reshade::d3d9::device_impl::on_init(const D3DPRESENT_PARAMETERS &pp)
 			}
 		}
 
+		const auto resource_view_handle = api::resource_view { reinterpret_cast<uintptr_t>(auto_depth_stencil.get()) };
 		// In case surface was replaced with a texture resource
-		const api::resource auto_depth_stencil_resource = get_resource_from_view(api::resource_view { reinterpret_cast<uintptr_t>(auto_depth_stencil.get()) });
+		const api::resource resource_handle = get_resource_from_view(resource_view_handle);
 
-		invoke_addon_event<addon_event::init_resource>(this, desc, nullptr, api::resource_usage::depth_stencil, auto_depth_stencil_resource);
-		invoke_addon_event<addon_event::init_resource_view>(this, auto_depth_stencil_resource, api::resource_usage::depth_stencil, api::resource_view_desc(desc.texture.format), api::resource_view { reinterpret_cast<uintptr_t>(auto_depth_stencil.get()) });
+		invoke_addon_event<addon_event::init_resource>(this, desc, nullptr, api::resource_usage::depth_stencil, resource_handle);
+		invoke_addon_event<addon_event::init_resource_view>(this, resource_handle, api::resource_usage::depth_stencil, api::resource_view_desc(desc.texture.format), resource_view_handle);
 
-		register_destruction_callback_d3d9(reinterpret_cast<IDirect3DResource9 *>(auto_depth_stencil_resource.handle), [this, auto_depth_stencil_resource]() {
-			invoke_addon_event<addon_event::destroy_resource>(this, auto_depth_stencil_resource);
+		register_destruction_callback_d3d9(reinterpret_cast<IDirect3DResource9 *>(resource_handle.handle), [this, resource_handle]() {
+			invoke_addon_event<addon_event::destroy_resource>(this, resource_handle);
 		});
-		register_destruction_callback_d3d9(auto_depth_stencil.get(), [this, resource_view = auto_depth_stencil.get()]() {
-			invoke_addon_event<addon_event::destroy_resource_view>(this, api::resource_view { reinterpret_cast<uintptr_t>(resource_view) });
-		}, reinterpret_cast<uintptr_t>(auto_depth_stencil.get()) == auto_depth_stencil_resource.handle ? 1 : 0);
+		register_destruction_callback_d3d9(reinterpret_cast<IDirect3DResource9 *>(resource_view_handle.handle), [this, resource_view_handle]() {
+			invoke_addon_event<addon_event::destroy_resource_view>(this, resource_view_handle);
+		}, resource_view_handle.handle == resource_handle.handle ? 1 : 0);
 
 		// Communicate default state to add-ons
-		invoke_addon_event<addon_event::bind_render_targets_and_depth_stencil>(this, 0, nullptr, api::resource_view { reinterpret_cast<uintptr_t>(auto_depth_stencil.get()) });
+		invoke_addon_event<addon_event::bind_render_targets_and_depth_stencil>(this, 0, nullptr, resource_view_handle);
 	}
 #else
 	UNREFERENCED_PARAMETER(pp);
@@ -211,15 +206,12 @@ void reshade::d3d9::device_impl::on_reset()
 	if (_copy_state == nullptr)
 		return;
 
-	// Release backup state before invoking device destroy event, since it may still hold references to resources and releasing it may therefore invoke resource destroy events
-	_backup_state.release_state_block();
-
 #if RESHADE_ADDON
 	// Force add-ons to release all resources associated with this device before performing reset
 	invoke_addon_event<addon_event::destroy_command_queue>(this);
 	invoke_addon_event<addon_event::destroy_command_list>(this);
 
-	// Release reference to the auto depth-stencil
+	// Release reference to the potentially replaced auto depth-stencil resource
 	_orig->SetDepthStencilSurface(nullptr);
 
 	invoke_addon_event<addon_event::destroy_device>(this);
@@ -323,6 +315,7 @@ bool reshade::d3d9::device_impl::create_resource(const api::resource_desc &desc,
 	{
 		case api::resource_type::buffer:
 		{
+			// Direct3D 9 only supports separate vertex and index buffers
 			switch (desc.usage & (api::resource_usage::vertex_buffer | api::resource_usage::index_buffer | api::resource_usage::constant_buffer))
 			{
 				case api::resource_usage::index_buffer:
@@ -369,7 +362,7 @@ bool reshade::d3d9::device_impl::create_resource(const api::resource_desc &desc,
 		case api::resource_type::texture_2d:
 		{
 			// Array or multisample textures are not supported in Direct3D 9
-			if (desc.texture.depth_or_layers != 1 || desc.texture.samples != 1)
+			if ((desc.texture.depth_or_layers != 1 && (desc.flags & api::resource_flags::cube_compatible) != api::resource_flags::cube_compatible) || desc.texture.samples != 1)
 				break;
 
 			UINT levels = 0;
@@ -711,26 +704,24 @@ reshade::api::resource reshade::d3d9::device_impl::get_resource_from_view(api::r
 	{
 		if (com_ptr<IDirect3DResource9> resource;
 			SUCCEEDED(surface->GetContainer(IID_PPV_ARGS(&resource))))
-		{
 			return { reinterpret_cast<uintptr_t>(resource.get()) };
-		}
 	}
 	else if (com_ptr<IDirect3DVolume9> volume;
 		SUCCEEDED(object->QueryInterface(&volume)))
 	{
 		if (com_ptr<IDirect3DResource9> resource;
 			SUCCEEDED(volume->GetContainer(IID_PPV_ARGS(&resource))))
-		{
 			return { reinterpret_cast<uintptr_t>(resource.get()) };
-		}
 	}
 
 	// If unable to get container, just return the resource directly
 	return { reinterpret_cast<uintptr_t>(object) };
 }
-reshade::api::resource reshade::d3d9::device_impl::get_resource_from_view(api::resource_view view, uint32_t *subresource) const
+reshade::api::resource reshade::d3d9::device_impl::get_resource_from_view(api::resource_view view, uint32_t *out_subresource, uint32_t *out_levels) const
 {
-	*subresource = 0;
+	*out_subresource = 0;
+	if (out_levels != nullptr)
+		*out_levels = 1;
 
 	const auto object = reinterpret_cast<IUnknown *>(view.handle & ~1ull);
 
@@ -745,7 +736,9 @@ reshade::api::resource reshade::d3d9::device_impl::get_resource_from_view(api::r
 				com_ptr<IDirect3DSurface9> surface;
 				if (SUCCEEDED(static_cast<IDirect3DTexture9 *>(resource)->GetSurfaceLevel(level, &surface)) && surface.get() == object)
 				{
-					*subresource = level;
+					*out_subresource = level;
+					if (out_levels != nullptr)
+						*out_levels = levels;
 					break;
 				}
 			}
@@ -758,7 +751,9 @@ reshade::api::resource reshade::d3d9::device_impl::get_resource_from_view(api::r
 				com_ptr<IDirect3DVolume9> volume;
 				if (SUCCEEDED(static_cast<IDirect3DVolumeTexture9 *>(resource)->GetVolumeLevel(level, &volume)) && volume.get() == object)
 				{
-					*subresource = level;
+					*out_subresource = level;
+					if (out_levels != nullptr)
+						*out_levels = levels;
 					break;
 				}
 			}
@@ -773,7 +768,9 @@ reshade::api::resource reshade::d3d9::device_impl::get_resource_from_view(api::r
 					com_ptr<IDirect3DSurface9> surface;
 					if (SUCCEEDED(static_cast<IDirect3DCubeTexture9 *>(resource)->GetCubeMapSurface(face, level, &surface)) && surface.get() == object)
 					{
-						*subresource = level + face * levels;
+						*out_subresource = level + face * levels;
+						if (out_levels != nullptr)
+							*out_levels = levels;
 						break;
 					}
 				}
@@ -798,13 +795,13 @@ reshade::api::resource_view_desc reshade::d3d9::device_impl::get_resource_view_d
 	{
 		case D3DRTYPE_SURFACE:
 		{
-			uint32_t subresource, level_count =
-				get_resource_desc(get_resource_from_view(view, &subresource)).texture.levels;
+			uint32_t subresource, levels;
+			get_resource_from_view(view, &subresource, &levels);
 
 			D3DSURFACE_DESC internal_desc;
 			static_cast<IDirect3DSurface9 *>(object)->GetDesc(&internal_desc);
 
-			return api::resource_view_desc(api::format_to_default_typed(convert_format(internal_desc.Format), set_srgb_bit), subresource % level_count, 1, subresource / level_count, 1);
+			return api::resource_view_desc(api::format_to_default_typed(convert_format(internal_desc.Format), set_srgb_bit), subresource % levels, 1, subresource / levels, 1);
 		}
 		case D3DRTYPE_TEXTURE:
 		{
@@ -1206,110 +1203,73 @@ void reshade::d3d9::device_impl::destroy_pipeline_layout(api::pipeline_layout ha
 	delete reinterpret_cast<pipeline_layout_impl *>(handle.handle);
 }
 
-void reshade::d3d9::device_impl::get_pipeline_layout_params(api::pipeline_layout layout, uint32_t *count, api::pipeline_layout_param *params) const
+reshade::api::pipeline_layout_param reshade::d3d9::device_impl::get_pipeline_layout_param(api::pipeline_layout layout, uint32_t index) const
 {
-	assert(layout.handle != 0 && count != nullptr);
+	assert(layout.handle != 0);
+
+	api::pipeline_layout_param param = {};
 
 	if (layout == global_pipeline_layout)
 	{
-		if (params != nullptr)
+		switch (index)
 		{
-			*count = std::min(*count, 8u);
+		case 0:
+			param.type = api::pipeline_layout_param_type::push_descriptors;
+			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF0 };
+			break;
+		case 1:
+			param.type = api::pipeline_layout_param_type::push_descriptors;
+			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF1 };
+			break;
 
-			if (*count > 0)
-			{
-				params[0].type = api::pipeline_layout_param_type::push_descriptors;
-				params[0].descriptor_layout = { 0xFFFFFFFFFFFFFFF0 };
-			}
-			if (*count > 1)
-			{
-				params[1].type = api::pipeline_layout_param_type::push_descriptors;
-				params[1].descriptor_layout = { 0xFFFFFFFFFFFFFFF1 };
-			}
+		// See https://docs.microsoft.com/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-registers-vs-3-0
+		case 2:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = _caps.MaxVertexShaderConst * 4; // c#
+			param.push_constants.visibility = api::shader_stage::vertex;
+			break;
+		case 3:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = 16 * 4; // i#
+			param.push_constants.visibility = api::shader_stage::vertex;
+			break;
+		case 4:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = 16; // b#
+			param.push_constants.visibility = api::shader_stage::vertex;
+			break;
 
-			// See https://docs.microsoft.com/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-registers-vs-3-0
-			if (*count > 2)
-			{
-				params[2].type = api::pipeline_layout_param_type::push_constants;
-				params[2].push_constants.offset = 0;
-				params[2].push_constants.binding = 0;
-				params[2].push_constants.dx_register_index = 0;
-				params[2].push_constants.dx_register_space = 0;
-				params[2].push_constants.count = _caps.MaxVertexShaderConst * 4; // c#
-				params[2].push_constants.visibility = api::shader_stage::vertex;
-			}
-			if (*count > 3)
-			{
-				params[3].type = api::pipeline_layout_param_type::push_constants;
-				params[3].push_constants.offset = 0;
-				params[3].push_constants.binding = 0;
-				params[3].push_constants.dx_register_index = 0;
-				params[3].push_constants.dx_register_space = 0;
-				params[3].push_constants.count = 16 * 4; // i#
-				params[3].push_constants.visibility = api::shader_stage::vertex;
-			}
-			if (*count > 4)
-			{
-				params[4].type = api::pipeline_layout_param_type::push_constants;
-				params[4].push_constants.offset = 0;
-				params[4].push_constants.binding = 0;
-				params[4].push_constants.dx_register_index = 0;
-				params[4].push_constants.dx_register_space = 0;
-				params[4].push_constants.count = 16; // b#
-				params[4].push_constants.visibility = api::shader_stage::vertex;
-			}
+		// See https://docs.microsoft.com/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-ps-registers-ps-3-0
+		case 5:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = 224 * 4; // c#
+			param.push_constants.visibility = api::shader_stage::pixel;
+			break;
+		case 6:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = 16 * 4; // i#
+			param.push_constants.visibility = api::shader_stage::pixel;
+			break;
+		case 7:
+			param.type = api::pipeline_layout_param_type::push_constants;
+			param.push_constants.count = 16; // b#
+			param.push_constants.visibility = api::shader_stage::pixel;
+			break;
 
-			// See https://docs.microsoft.com/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-ps-registers-ps-3-0
-			if (*count > 5)
-			{
-				params[5].type = api::pipeline_layout_param_type::push_constants;
-				params[5].push_constants.offset = 0;
-				params[5].push_constants.binding = 0;
-				params[5].push_constants.dx_register_index = 0;
-				params[5].push_constants.dx_register_space = 0;
-				params[5].push_constants.count = 224 * 4; // c#
-				params[5].push_constants.visibility = api::shader_stage::pixel;
-			}
-			if (*count > 6)
-			{
-				params[6].type = api::pipeline_layout_param_type::push_constants;
-				params[6].push_constants.offset = 0;
-				params[6].push_constants.binding = 0;
-				params[6].push_constants.dx_register_index = 0;
-				params[6].push_constants.dx_register_space = 0;
-				params[6].push_constants.count = 16 * 4; // i#
-				params[6].push_constants.visibility = api::shader_stage::pixel;
-			}
-			if (*count > 7)
-			{
-				params[7].type = api::pipeline_layout_param_type::push_constants;
-				params[7].push_constants.offset = 0;
-				params[7].push_constants.binding = 0;
-				params[7].push_constants.dx_register_index = 0;
-				params[7].push_constants.dx_register_space = 0;
-				params[7].push_constants.count = 16; // b#
-				params[7].push_constants.visibility = api::shader_stage::pixel;
-			}
-		}
-		else
-		{
-			*count = 8u;
+		default:
+			assert(false);
+			break;
 		}
 	}
 	else
 	{
 		const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
 
-		if (params != nullptr)
-		{
-			*count = std::min(*count, static_cast<uint32_t>(layout_impl->params.size()));
-			std::memcpy(params, layout_impl->params.data(), *count * sizeof(api::pipeline_layout_param));
-		}
-		else
-		{
-			*count = static_cast<uint32_t>(layout_impl->params.size());
-		}
+		if (index < layout_impl->params.size())
+			param = layout_impl->params[index];
 	}
+
+	return param;
 }
 
 bool reshade::d3d9::device_impl::create_descriptor_set_layout(uint32_t range_count, const api::descriptor_range *ranges, bool, api::descriptor_set_layout *out_handle)

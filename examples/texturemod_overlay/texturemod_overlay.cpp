@@ -8,8 +8,8 @@
 #include "descriptor_set_tracking.hpp"
 #include <mutex>
 #include <algorithm>
+#include <filesystem>
 #include <unordered_set>
-#include <malloc.h>
 
 using namespace reshade::api;
 
@@ -223,20 +223,15 @@ static void on_bind_descriptor_sets(command_list *cmd_list, shader_stage stages,
 	auto &descriptor_data = device->get_private_data<descriptor_set_tracking>(descriptor_set_tracking::GUID);
 	assert((&descriptor_data) != nullptr);
 
-	uint32_t param_count = 0;
-	device->get_pipeline_layout_params(layout, &param_count, nullptr);
-	const auto params = static_cast<pipeline_layout_param *>(_malloca(param_count * sizeof(pipeline_layout_param)));
-	device->get_pipeline_layout_params(layout, &param_count, params);
-	assert(first + count <= param_count);
-
 	for (uint32_t i = 0; i < count; ++i)
 	{
-		assert(params[first + i].type == pipeline_layout_param_type::descriptor_set);
+		const pipeline_layout_param param = device->get_pipeline_layout_param(layout, first + i);
+		assert(param.type == pipeline_layout_param_type::descriptor_set);
 	
 		uint32_t range_count = 0;
-		device->get_descriptor_set_layout_ranges(params[first + i].descriptor_layout, &range_count, nullptr);
+		device->get_descriptor_set_layout_ranges(param.descriptor_layout, &range_count, nullptr);
 		std::vector<descriptor_range> ranges(range_count);
-		device->get_descriptor_set_layout_ranges(params[first + i].descriptor_layout, &range_count, ranges.data());
+		device->get_descriptor_set_layout_ranges(param.descriptor_layout, &range_count, ranges.data());
 
 		uint32_t base_offset = 0;
 		descriptor_pool pool = { 0 };
@@ -259,8 +254,6 @@ static void on_bind_descriptor_sets(command_list *cmd_list, shader_stage stages,
 			}
 		}
 	}
-
-	_freea(params);
 }
 
 static void on_execute(command_queue *, command_list *cmd_list)
@@ -308,8 +301,17 @@ static void on_present(command_queue *queue, swapchain *runtime)
 	s_is_in_reshade_runtime = true;
 }
 
-// See implementation in 'texturemod_dump.cpp'
-extern bool dump_texture(command_queue *queue, resource tex, const resource_desc &desc);
+// See implementation in 'dump_texture.cpp'
+extern bool dump_texture(command_queue *queue, resource tex, const resource_desc &desc, const std::filesystem::path &file_prefix);
+
+static bool dump_texture(command_queue *queue, resource tex, const resource_desc &desc)
+{
+	// Prepend executable file name to image files
+	WCHAR file_prefix[MAX_PATH] = {};
+	GetModuleFileNameW(nullptr, file_prefix, ARRAYSIZE(file_prefix));
+
+	return dump_texture(queue, tex, desc, std::wstring(file_prefix) + L'_');
+}
 
 static void draw_overlay(effect_runtime *runtime)
 {
@@ -367,7 +369,7 @@ static void draw_overlay(effect_runtime *runtime)
 		const ImVec2 pos = ImGui::GetCursorScreenPos();
 		const ImVec2 size = aspect_ratio > 1 ? ImVec2(single_image_max_size, single_image_max_size / aspect_ratio) : ImVec2(single_image_max_size * aspect_ratio, single_image_max_size);
 
-		ImGui::Image(tex_data.last_view.handle, size, ImVec2(0, 0), ImVec2(1, 1), ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + size.x, pos.y + size.y)) ? ImColor(0.0f, 1.0f, 0.0f) : ImColor(1.0f, 1.0f, 1.0f));
+		ImGui::Image(tex_data.last_view, size, ImVec2(0, 0), ImVec2(1, 1), ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + size.x, pos.y + size.y)) ? ImColor(0.0f, 1.0f, 0.0f) : ImColor(1.0f, 1.0f, 1.0f), ImColor(0.0f, 0.0f, 0.0f, 0.0f));
 
 		if (ImGui::IsItemHovered())
 			data.replaced_texture_srv = tex_data.last_view;
@@ -399,8 +401,6 @@ extern void unregister_addon_descriptor_set_tracking();
 
 void register_addon_texmod_overlay()
 {
-	register_addon_descriptor_set_tracking();
-
 	reshade::register_overlay("TexMod", draw_overlay);
 
 	reshade::register_event<reshade::addon_event::init_device>(on_init_device);
@@ -420,8 +420,6 @@ void register_addon_texmod_overlay()
 }
 void unregister_addon_texmod_overlay()
 {
-	unregister_addon_descriptor_set_tracking();
-
 	reshade::unregister_overlay("TexMod", draw_overlay);
 
 	reshade::unregister_event<reshade::addon_event::init_device>(on_init_device);
@@ -438,4 +436,27 @@ void unregister_addon_texmod_overlay()
 
 	reshade::unregister_event<reshade::addon_event::execute_command_list>(on_execute);
 	reshade::unregister_event<reshade::addon_event::present>(on_present);
+}
+
+extern "C" __declspec(dllexport) const char *NAME = "TextureMod Overlay";
+extern "C" __declspec(dllexport) const char *DESCRIPTION = "Example add-on that shows an overlay to inspect the textures used by the application.";
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
+{
+	switch (fdwReason)
+	{
+	case DLL_PROCESS_ATTACH:
+		if (!reshade::register_addon(hModule))
+			return FALSE;
+		register_addon_texmod_overlay();
+		register_addon_descriptor_set_tracking();
+		break;
+	case DLL_PROCESS_DETACH:
+		unregister_addon_texmod_overlay();
+		unregister_addon_descriptor_set_tracking();
+		reshade::unregister_addon(hModule);
+		break;
+	}
+
+	return TRUE;
 }

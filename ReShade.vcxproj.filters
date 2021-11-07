@@ -84,6 +84,9 @@
     <ClCompile Include="source\addon_manager.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="examples\generic_depth\generic_depth.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="source\input.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
@@ -345,6 +348,9 @@
       <Filter>core\api</Filter>
     </ClInclude>
     <ClInclude Include="include\reshade_api.hpp">
+      <Filter>core\api</Filter>
+    </ClInclude>
+    <ClInclude Include="include\reshade_api_device.hpp">
       <Filter>core\api</Filter>
     </ClInclude>
     <ClInclude Include="include\reshade_api_format.hpp">

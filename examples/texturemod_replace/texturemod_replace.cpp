@@ -3,6 +3,8 @@
  * License: https://github.com/crosire/reshade#license
  */
 
+#define STB_IMAGE_IMPLEMENTATION
+
 #include <reshade.hpp>
 #include "crc32_hash.hpp"
 #include <fstream>
@@ -11,7 +13,7 @@
 
 using namespace reshade::api;
 
-static bool replace_texture(const resource_desc &desc, subresource_data &data)
+static bool replace_texture(const resource_desc &desc, subresource_data &data, const std::filesystem::path &file_prefix)
 {
 	if (desc.texture.format != format::r8g8b8a8_typeless && desc.texture.format != format::r8g8b8a8_unorm && desc.texture.format != format::r8g8b8a8_unorm_srgb &&
 		desc.texture.format != format::b8g8r8a8_typeless && desc.texture.format != format::b8g8r8a8_unorm && desc.texture.format != format::b8g8r8a8_unorm_srgb &&
@@ -19,13 +21,25 @@ static bool replace_texture(const resource_desc &desc, subresource_data &data)
 		desc.texture.format != format::b8g8r8x8_typeless && desc.texture.format != format::b8g8r8x8_unorm && desc.texture.format != format::b8g8r8x8_unorm_srgb)
 		return false;
 
-	const uint32_t hash = compute_crc32(static_cast<const uint8_t *>(data.data), format_slice_pitch(desc.texture.format, data.row_pitch, desc.texture.height));
+#if 0
+	// Correct hash calculation using entire resource data
+	const uint32_t hash = compute_crc32(
+		static_cast<const uint8_t *>(data.data),
+		format_slice_pitch(desc.texture.format, data.row_pitch, desc.texture.height));
+#else
+	// Behavior of the original TexMod (see https://github.com/codemasher/texmod/blob/master/uMod_DX9/uMod_TextureFunction.cpp#L41)
+	const uint32_t hash = ~compute_crc32(
+		static_cast<const uint8_t *>(data.data),
+		desc.texture.height * (
+			(desc.texture.format >= format::bc1_typeless && desc.texture.format <= format::bc1_unorm_srgb) || (desc.texture.format >= format::bc4_typeless && desc.texture.format <= format::bc4_snorm) ? (desc.texture.width * 4) / 8 :
+			(desc.texture.format >= format::bc2_typeless && desc.texture.format <= format::bc2_unorm_srgb) || (desc.texture.format >= format::bc3_typeless && desc.texture.format <= format::bc3_unorm_srgb) || (desc.texture.format >= format::bc5_typeless && desc.texture.format <= format::bc7_unorm_srgb) ? desc.texture.width :
+			format_row_pitch(desc.texture.format, desc.texture.width)));
+#endif
 
 	char hash_string[11];
-	sprintf_s(hash_string, "0x%08x", hash);
+	sprintf_s(hash_string, "0x%08X", hash);
 
-	std::filesystem::path replace_path;
-	replace_path /= L"texture_";
+	std::filesystem::path replace_path = file_prefix;
 	replace_path += hash_string;
 	replace_path += L".bmp";
 
@@ -56,6 +70,15 @@ static bool replace_texture(const resource_desc &desc, subresource_data &data)
 	}
 
 	return false;
+}
+
+static bool replace_texture(const resource_desc &desc, subresource_data &data)
+{
+	// Prepend executable file name to image files
+	WCHAR file_prefix[MAX_PATH] = {};
+	GetModuleFileNameW(nullptr, file_prefix, ARRAYSIZE(file_prefix));
+
+	return replace_texture(desc, data, std::wstring(file_prefix) + L'_');
 }
 
 static inline bool filter_texture(device *device, const resource_desc &desc, const int32_t box[6])
@@ -212,8 +235,6 @@ void unregister_addon_texmod_replace()
 	reshade::unregister_event<reshade::addon_event::unmap_texture_region>(on_unmap_texture);
 }
 
-#ifdef _WINDLL
-
 extern "C" __declspec(dllexport) const char *NAME = "TextureMod Replace";
 extern "C" __declspec(dllexport) const char *DESCRIPTION = "Example add-on that replaces textures the application creates with image files loaded from disk.";
 
@@ -234,5 +255,3 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 
 	return TRUE;
 }
-
-#endif

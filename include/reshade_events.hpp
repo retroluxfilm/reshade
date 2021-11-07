@@ -112,6 +112,7 @@ namespace reshade
 		/// <item><description>IDXGIFactory2::CreateSwapChain(...)</description></item>
 		/// <item><description>IDXGISwapChain::ResizeBuffers</description></item>
 		/// <item><description>IDXGISwapChain3::ResizeBuffers1</description></item>
+		/// <item><description>wglMakeCurrent</description></item>
 		/// <item><description>wglSwapBuffers (after window was resized)</description></item>
 		/// <item><description>vkCreateSwapchainKHR</description></item>
 		/// </list>
@@ -142,6 +143,7 @@ namespace reshade
 		/// <item><description>IDirect3DDevice9::Release (for the implicit swap chain)</description></item>
 		/// <item><description>IDirect3DSwapChain9::Release</description></item>
 		/// <item><description>IDXGISwapChain::Release</description></item>
+		/// <item><description>wglDeleteContext</description></item>
 		/// <item><description>wglSwapBuffers (after window was resized)</description></item>
 		/// <item><description>vkDestroySwapchainKHR</description></item>
 		/// </list>
@@ -1363,13 +1365,13 @@ namespace reshade
 
 		/// <summary>
 		/// Called right before ReShade effects are rendered.
-		/// <para>Callback function signature: <c>void (api::effect_runtime *runtime, api::command_list *cmd_list)</c></para>
+		/// <para>Callback function signature: <c>void (api::effect_runtime *runtime, api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)</c></para>
 		/// </summary>
 		reshade_begin_effects,
 
 		/// <summary>
 		/// Called right after ReShade effects were rendered.
-		/// <para>Callback function signature: <c>void (api::effect_runtime *runtime, api::command_list *cmd_list)</c></para>
+		/// <para>Callback function signature: <c>void (api::effect_runtime *runtime, api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)</c></para>
 		/// </summary>
 		reshade_finish_effects,
 
@@ -1487,7 +1489,7 @@ namespace reshade
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::present, void, api::command_queue *queue, api::swapchain *swapchain);
 
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_begin_effects, void, api::effect_runtime *runtime, api::command_list *cmd_list);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_finish_effects, void, api::effect_runtime *runtime, api::command_list *cmd_list);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_begin_effects, void, api::effect_runtime *runtime, api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_finish_effects, void, api::effect_runtime *runtime, api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_reloaded_effects, void, api::effect_runtime *runtime);
 }

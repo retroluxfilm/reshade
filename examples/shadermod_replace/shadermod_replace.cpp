@@ -10,8 +10,11 @@
 
 using namespace reshade::api;
 
-static bool replace_shader_code(device_api device_type, pipeline_stage, shader_desc &desc)
+static bool replace_shader_code(device_api device_type, pipeline_stage, shader_desc &desc, const std::filesystem::path &file_prefix = L"shader_")
 {
+	if (desc.code_size == 0)
+		return false;
+
 	uint32_t shader_hash = compute_crc32(static_cast<const uint8_t *>(desc.code), desc.code_size);
 
 	const wchar_t *extension = L".cso";
@@ -22,10 +25,9 @@ static bool replace_shader_code(device_api device_type, pipeline_stage, shader_d
 		extension = L".glsl"; // OpenGL otherwise uses plain text GLSL
 
 	char hash_string[11];
-	sprintf_s(hash_string, "0x%08x", shader_hash);
+	sprintf_s(hash_string, "0x%08X", shader_hash);
 
-	std::filesystem::path replace_path;
-	replace_path /= L"shader_";
+	std::filesystem::path replace_path = file_prefix;
 	replace_path += hash_string;
 	replace_path += extension;
 
@@ -53,19 +55,19 @@ static bool on_create_pipeline(device *device, pipeline_desc &desc, uint32_t, co
 	const device_api device_type = device->get_api();
 
 	// Go through all shader stages that are in this pipeline and potentially replace the associated shader code
-	if ((desc.type & pipeline_stage::vertex_shader) == pipeline_stage::vertex_shader)
+	if (desc.type == pipeline_stage::all_graphics || (desc.type & pipeline_stage::vertex_shader) == pipeline_stage::vertex_shader)
 		if (replace_shader_code(device_type, pipeline_stage::vertex_shader, desc.graphics.vertex_shader))
 			replaced_stages |= shader_stage::vertex; // Keep track of which shader stages were replaced, so that the memory allocated for that can be freed again
-	if ((desc.type & pipeline_stage::hull_shader) == pipeline_stage::hull_shader)
+	if (desc.type == pipeline_stage::all_graphics || (desc.type & pipeline_stage::hull_shader) == pipeline_stage::hull_shader)
 		if (replace_shader_code(device_type, pipeline_stage::hull_shader, desc.graphics.hull_shader))
 			replaced_stages |= shader_stage::hull;
-	if ((desc.type & pipeline_stage::domain_shader) == pipeline_stage::domain_shader)
+	if (desc.type == pipeline_stage::all_graphics || (desc.type & pipeline_stage::domain_shader) == pipeline_stage::domain_shader)
 		if (replace_shader_code(device_type, pipeline_stage::domain_shader, desc.graphics.domain_shader))
 			replaced_stages |= shader_stage::domain;
-	if ((desc.type & pipeline_stage::geometry_shader) == pipeline_stage::geometry_shader)
+	if (desc.type == pipeline_stage::all_graphics || (desc.type & pipeline_stage::geometry_shader) == pipeline_stage::geometry_shader)
 		if (replace_shader_code(device_type, pipeline_stage::geometry_shader, desc.graphics.geometry_shader))
 			replaced_stages |= shader_stage::geometry;
-	if ((desc.type & pipeline_stage::pixel_shader) == pipeline_stage::pixel_shader)
+	if (desc.type == pipeline_stage::all_graphics || (desc.type & pipeline_stage::pixel_shader) == pipeline_stage::pixel_shader)
 		if (replace_shader_code(device_type, pipeline_stage::pixel_shader, desc.graphics.pixel_shader))
 			replaced_stages |= shader_stage::pixel;
 	if ((desc.type & pipeline_stage::compute_shader) == pipeline_stage::compute_shader)
@@ -97,19 +99,6 @@ static void on_after_create_pipeline(device *device, const pipeline_desc &desc, 
 	replaced_stages = static_cast<shader_stage>(0);
 }
 
-void register_addon_shadermod_replace()
-{
-	reshade::register_event<reshade::addon_event::create_pipeline>(on_create_pipeline);
-	reshade::register_event<reshade::addon_event::init_pipeline>(on_after_create_pipeline);
-}
-void unregister_addon_shadermod_replace()
-{
-	reshade::unregister_event<reshade::addon_event::create_pipeline>(on_create_pipeline);
-	reshade::unregister_event<reshade::addon_event::init_pipeline>(on_after_create_pipeline);
-}
-
-#ifdef _WINDLL
-
 extern "C" __declspec(dllexport) const char *NAME = "ShaderMod Replace";
 extern "C" __declspec(dllexport) const char *DESCRIPTION = "Example add-on that replaces shaders the application creates with binaries loaded from disk.";
 
@@ -120,15 +109,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 	case DLL_PROCESS_ATTACH:
 		if (!reshade::register_addon(hModule))
 			return FALSE;
-		register_addon_shadermod_replace();
+		reshade::register_event<reshade::addon_event::create_pipeline>(on_create_pipeline);
+		reshade::register_event<reshade::addon_event::init_pipeline>(on_after_create_pipeline);
 		break;
 	case DLL_PROCESS_DETACH:
-		unregister_addon_shadermod_replace();
+		reshade::unregister_event<reshade::addon_event::create_pipeline>(on_create_pipeline);
+		reshade::unregister_event<reshade::addon_event::init_pipeline>(on_after_create_pipeline);
 		reshade::unregister_addon(hModule);
 		break;
 	}
 
 	return TRUE;
 }
-
-#endif

@@ -30,9 +30,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID)
         reshade::register_event<reshade::addon_event::present>(&on_present);
         break;
     case DLL_PROCESS_DETACH:
-        // This unregisters the event callback that was previously registered during process attachment.
+        // Optionally unregister the event callback that was previously registered during process attachment again.
         reshade::unregister_event<reshade::addon_event::present>(&on_present);
-        // And finally unregister the add-on from ReShade (this will automatically clean up any events and overlays registered by this add-on as well).
+        // And finally unregister the add-on from ReShade (this will automatically unregister any events and overlays registered by this add-on).
         reshade::unregister_addon(hinstDLL);
         break;
     }
@@ -106,7 +106,7 @@ You can however call `ImGui::Begin` and `ImGui::End` with a different title to o
 
 The graphics API abstraction is modeled after the Vulkan API, so much of the terminology used should be familiar to developers that have used Vulkan before.
 
-Detailed inline documentation for all classes and methods can be found inside the headers (see `reshade_api.hpp` for the abstraction object classes and `reshade_events.hpp` for a list of available events).
+Detailed inline documentation for all classes and methods can be found inside the headers (see `reshade_api_device.hpp` for the abstraction object classes and `reshade_events.hpp` for a list of available events).
 
 The base object everything else is created from is a `reshade::api::device`. This represents a logical rendering device that is typically mapped to a physical GPU (but may also be mapped to multiple GPUs). ReShade will call the `reshade::addon_event::init_device` event after the application created a device, which can e.g. be used to do some initialization work that only has to happen once. The `reshade::addon_event::destroy_device` event is called before this device is destroyed again, which can be used to perform clean up work.
 ```cpp
