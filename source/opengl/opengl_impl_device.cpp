@@ -67,12 +67,14 @@ reshade::opengl::device_impl::device_impl(HDC initial_hdc, HGLRC hglrc, bool com
 	}
 
 #ifndef NDEBUG
-	glEnable(GL_DEBUG_OUTPUT);
-	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
-	glDebugMessageCallback([](unsigned int /*source*/, unsigned int type, unsigned int /*id*/, unsigned int /*severity*/, int /*length*/, const char *message, const void * /*userParam*/) {
+	const auto debug_message_callback = [](unsigned int /*source*/, unsigned int type, unsigned int /*id*/, unsigned int /*severity*/, int /*length*/, const char *message, const void * /*userParam*/) {
 		if (type == GL_DEBUG_TYPE_ERROR || type == GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR)
 			OutputDebugStringA(message), OutputDebugStringA("\n");
-	}, nullptr);
+	};
+
+	glEnable(GL_DEBUG_OUTPUT);
+	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+	glDebugMessageCallback(debug_message_callback, nullptr);
 #endif
 
 	// Some games (like Hot Wheels Velocity X) use fixed texture names, which can clash with the ones ReShade generates below, since most implementations will return values linearly
@@ -529,20 +531,26 @@ reshade::api::resource_desc reshade::opengl::device_impl::get_resource_desc(api:
 	{
 		case GL_BUFFER:
 		{
-			GLint size = 0;
+			GLsizeiptr size = 0;
 
 			if (_supports_dsa)
 			{
-				glGetNamedBufferParameteriv(object, GL_BUFFER_SIZE, &size);
+#ifndef WIN64
+				glGetNamedBufferParameteriv(object, GL_BUFFER_SIZE, reinterpret_cast<GLint *>(&size));
+#else
+				glGetNamedBufferParameteri64v(object, GL_BUFFER_SIZE, &size);
+#endif
 			}
 			else
 			{
 				GLint prev_binding = 0;
 				glGetIntegerv(GL_COPY_READ_BUFFER_BINDING, &prev_binding);
 				glBindBuffer(GL_COPY_READ_BUFFER, object);
-
-				glGetBufferParameteriv(GL_COPY_READ_BUFFER, GL_BUFFER_SIZE, &size);
-
+#ifndef WIN64
+				glGetBufferParameteriv(GL_COPY_READ_BUFFER, GL_BUFFER_SIZE, reinterpret_cast<GLint *>(&size));
+#else
+				glGetBufferParameteri64v(GL_COPY_READ_BUFFER, GL_BUFFER_SIZE, &size);
+#endif
 				glBindBuffer(GL_COPY_READ_BUFFER, prev_binding);
 			}
 
@@ -1739,8 +1747,13 @@ bool reshade::opengl::device_impl::map_buffer_region(api::resource resource, uin
 	{
 		if (size == std::numeric_limits<uint64_t>::max())
 		{
+#ifndef WIN64
 			GLint max_size = 0;
 			glGetNamedBufferParameteriv(object, GL_BUFFER_SIZE, &max_size);
+#else
+			GLint64 max_size = 0;
+			glGetNamedBufferParameteri64v(object, GL_BUFFER_SIZE, &max_size);
+#endif
 			size = max_size;
 		}
 
@@ -1755,8 +1768,13 @@ bool reshade::opengl::device_impl::map_buffer_region(api::resource resource, uin
 
 		if (size == std::numeric_limits<uint64_t>::max())
 		{
+#ifndef WIN64
 			GLint max_size = 0;
 			glGetBufferParameteriv(GL_COPY_WRITE_BUFFER, GL_BUFFER_SIZE, &max_size);
+#else
+			GLint64 max_size = 0;
+			glGetBufferParameteri64v(GL_COPY_WRITE_BUFFER, GL_BUFFER_SIZE, &max_size);
+#endif
 			size = max_size;
 		}
 
