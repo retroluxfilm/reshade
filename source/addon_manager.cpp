@@ -11,106 +11,12 @@
 #include "dll_log.hpp"
 #include "ini_file.hpp"
 
-#ifndef RESHADE_TEST_APPLICATION
 extern void register_addon_depth();
 extern void unregister_addon_depth();
-#endif
 
 extern HMODULE g_module_handle;
 
 extern std::filesystem::path get_module_path(HMODULE module);
-
-bool reshade::addon::enabled = true;
-std::vector<void *> reshade::addon::event_list[static_cast<uint32_t>(reshade::addon_event::max)];
-std::vector<reshade::addon::info> reshade::addon::loaded_info;
-static unsigned long s_reference_count = 0;
-
-void reshade::load_addons()
-{
-	// Only load add-ons the first time a reference is added
-	if (s_reference_count++ != 0)
-		return;
-
-#ifndef RESHADE_TEST_APPLICATION
-#if RESHADE_VERBOSE_LOG
-	LOG(INFO) << "Loading built-in add-ons ...";
-#endif
-
-	std::vector<std::string> disabled_addons;
-	reshade::global_config().get("ADDON", "DisabledAddons", disabled_addons);
-
-	{	addon::info &info = addon::loaded_info.emplace_back();
-		info.name = "Generic Depth";
-		info.description = "Automatic depth buffer detection that works in the majority of games.";
-		info.file = g_reshade_dll_path.u8string();
-		info.author = "crosire";
-		info.version = VERSION_STRING_FILE;
-
-		if (std::find(disabled_addons.begin(), disabled_addons.end(), info.name) == disabled_addons.end())
-		{
-			info.handle = g_module_handle;
-
-			register_addon_depth();
-		}
-	}
-#endif
-
-#if RESHADE_ADDON_LOAD
-	// Get directory from where to load add-ons from
-	std::filesystem::path addon_search_path = g_reshade_base_path;
-	if (global_config().get("INSTALL", "AddonPath", addon_search_path))
-		addon_search_path = g_reshade_base_path / addon_search_path;
-
-	LOG(INFO) << "Searching for add-ons (*.addon) in " << addon_search_path << " ...";
-
-	std::error_code ec;
-	for (std::filesystem::path path : std::filesystem::directory_iterator(addon_search_path, std::filesystem::directory_options::skip_permission_denied, ec))
-	{
-		if (path.extension() != L".addon")
-			continue;
-
-		LOG(INFO) << "Loading add-on from " << path << " ...";
-
-		// Use 'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR' to temporarily add add-on search path to the list of directories "LoadLibraryEx" will use to resolve DLL dependencies
-		const HMODULE handle = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-		if (handle == nullptr)
-		{
-			LOG(WARN) << "Failed to load add-on from " << path << " with error code " << GetLastError() << '.';
-			continue;
-		}
-	}
-#endif
-}
-void reshade::unload_addons()
-{
-	// Only unload add-ons after the last reference to the manager was released
-	if (--s_reference_count != 0)
-		return;
-
-#if RESHADE_ADDON_LOAD
-	// Create copy of add-on list before unloading, since add-ons call 'ReShadeUnregisterAddon' during 'FreeLibrary', which modifies the list
-	const std::vector<addon::info> loaded_info_copy = addon::loaded_info;
-	for (const addon::info &info : loaded_info_copy)
-	{
-		if (info.handle == nullptr || info.handle == g_module_handle)
-			continue; // Skip disabled and built-in add-ons
-
-		LOG(INFO) << "Unloading add-on \"" << info.name << "\" ...";
-
-		FreeLibrary(static_cast<HMODULE>(info.handle));
-	}
-#endif
-
-#ifndef RESHADE_TEST_APPLICATION
-#if RESHADE_VERBOSE_LOG
-	LOG(INFO) << "Unloading built-in add-ons ...";
-#endif
-
-	unregister_addon_depth();
-#endif
-
-	addon::loaded_info.clear();
-}
 
 #if RESHADE_VERBOSE_LOG
 static const char *addon_event_to_string(reshade::addon_event ev)
@@ -195,6 +101,96 @@ static const char *addon_event_to_string(reshade::addon_event ev)
 	return "unknown";
 }
 #endif
+
+bool reshade::addon::enabled = true;
+std::vector<void *> reshade::addon::event_list[static_cast<uint32_t>(reshade::addon_event::max)];
+std::vector<reshade::addon::info> reshade::addon::loaded_info;
+static unsigned long s_reference_count = 0;
+
+void reshade::load_addons()
+{
+	// Only load add-ons the first time a reference is added
+	if (s_reference_count++ != 0)
+		return;
+
+#if RESHADE_VERBOSE_LOG
+	LOG(INFO) << "Loading built-in add-ons ...";
+#endif
+
+	std::vector<std::string> disabled_addons;
+	reshade::global_config().get("ADDON", "DisabledAddons", disabled_addons);
+
+	{	addon::info &info = addon::loaded_info.emplace_back();
+		info.name = "Generic Depth";
+		info.description = "Automatic depth buffer detection that works in the majority of games.";
+		info.file = g_reshade_dll_path.u8string();
+		info.author = "crosire";
+		info.version = VERSION_STRING_FILE;
+
+		if (std::find(disabled_addons.begin(), disabled_addons.end(), info.name) == disabled_addons.end())
+		{
+			info.handle = g_module_handle;
+
+			register_addon_depth();
+		}
+	}
+
+#if RESHADE_ADDON_LOAD
+	// Get directory from where to load add-ons from
+	std::filesystem::path addon_search_path = g_reshade_base_path;
+	if (global_config().get("INSTALL", "AddonPath", addon_search_path))
+		addon_search_path = g_reshade_base_path / addon_search_path;
+
+	LOG(INFO) << "Searching for add-ons (*.addon) in " << addon_search_path << " ...";
+
+	std::error_code ec;
+	for (std::filesystem::path path : std::filesystem::directory_iterator(addon_search_path, std::filesystem::directory_options::skip_permission_denied, ec))
+	{
+		if (path.extension() != L".addon")
+			continue;
+
+		LOG(INFO) << "Loading add-on from " << path << " ...";
+
+		// Use 'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR' to temporarily add add-on search path to the list of directories "LoadLibraryEx" will use to resolve DLL dependencies
+		const HMODULE handle = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+		if (handle == nullptr)
+		{
+			LOG(WARN) << "Failed to load add-on from " << path << " with error code " << GetLastError() << '.';
+			continue;
+		}
+	}
+#endif
+}
+void reshade::unload_addons()
+{
+	// Only unload add-ons after the last reference to the manager was released
+	if (--s_reference_count != 0)
+		return;
+
+#if RESHADE_ADDON_LOAD
+	// Create copy of add-on list before unloading, since add-ons call 'ReShadeUnregisterAddon' during 'FreeLibrary', which modifies the list
+	const std::vector<addon::info> loaded_info_copy = addon::loaded_info;
+	for (const addon::info &info : loaded_info_copy)
+	{
+		if (info.handle == nullptr || info.handle == g_module_handle)
+			continue; // Skip disabled and built-in add-ons
+
+		LOG(INFO) << "Unloading add-on \"" << info.name << "\" ...";
+
+		FreeLibrary(static_cast<HMODULE>(info.handle));
+	}
+#endif
+
+#if RESHADE_VERBOSE_LOG
+	LOG(INFO) << "Unloading built-in add-ons ...";
+#endif
+
+	unregister_addon_depth();
+
+	addon::loaded_info.clear();
+}
+
+#if RESHADE_ADDON && RESHADE_ADDON_LOAD
 
 reshade::addon::info *find_addon(HMODULE module)
 {
@@ -399,6 +395,8 @@ void ReShadeUnregisterOverlay(const char *title, void(*callback)(reshade::api::e
 	LOG(DEBUG) << "Unregistered overlay with title \"" << title << "\" and callback " << callback << '.';
 #endif
 }
+#endif
+
 #endif
 
 #endif
