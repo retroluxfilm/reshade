@@ -577,8 +577,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 			};
 			const char *const enabled_extensions[] = {
 				VK_KHR_SURFACE_EXTENSION_NAME,
-				VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-				VK_EXT_DEBUG_REPORT_EXTENSION_NAME
+				VK_KHR_WIN32_SURFACE_EXTENSION_NAME
 			};
 
 			VkInstanceCreateInfo create_info { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
@@ -868,8 +867,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 				goto continue_search;
 
 			// Create dump with exception information for the first 100 occurrences
-			if (static unsigned int dump_index = 0;
-				++dump_index < 100)
+			if (static unsigned int dump_index = 0; dump_index < 100)
 			{
 				// Call into the original "LoadLibrary" directly, to avoid failing memory corruption checks
 				const auto ll = reshade::hooks::call<decltype(&LoadLibraryW)>(nullptr, LoadLibraryW);
@@ -896,9 +894,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 				MINIDUMP_EXCEPTION_INFORMATION info;
 				info.ThreadId = GetCurrentThreadId();
 				info.ExceptionPointers = ex;
-				info.ClientPointers = FALSE;
+				info.ClientPointers = TRUE;
 
-				dbghelp_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal, &info, nullptr, nullptr);
+				if (dbghelp_write_dump(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal, &info, nullptr, nullptr))
+					dump_index++;
 
 				CloseHandle(file);
 			}

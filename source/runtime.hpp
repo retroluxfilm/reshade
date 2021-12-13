@@ -44,6 +44,8 @@ namespace reshade
 		/// </summary>
 		api::command_queue *get_command_queue() final { return _graphics_queue; }
 
+		inline std::filesystem::path get_config_path() const { return _config_path; }
+
 		/// <summary>
 		/// Gets a boolean indicating whether effects are being loaded.
 		/// </summary>
@@ -129,7 +131,7 @@ namespace reshade
 		void get_uniform_annotation_value(api::effect_uniform_variable variable, const char *name, float *values, size_t count, size_t array_index = 0) const final;
 		void get_uniform_annotation_value(api::effect_uniform_variable variable, const char *name, int32_t *values, size_t count, size_t array_index = 0) const final;
 		void get_uniform_annotation_value(api::effect_uniform_variable variable, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
-		const char *get_uniform_annotation_string(api::effect_uniform_variable variable, const char *name) const final;
+		bool get_uniform_annotation_string(api::effect_uniform_variable variable, const char *name, char *value, size_t *length) const final;
 
 		/// <summary>
 		/// Gets the value of the specified uniform <paramref name="variable"/>.
@@ -194,7 +196,7 @@ namespace reshade
 		void get_texture_annotation_value(api::effect_texture_variable variable, const char *name, float *values, size_t count, size_t array_index = 0) const final;
 		void get_texture_annotation_value(api::effect_texture_variable variable, const char *name, int32_t *values, size_t count, size_t array_index = 0) const final;
 		void get_texture_annotation_value(api::effect_texture_variable variable, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
-		const char *get_texture_annotation_string(api::effect_texture_variable variable, const char *name) const final;
+		bool get_texture_annotation_string(api::effect_texture_variable variable, const char *name, char *value, size_t *length) const final;
 
 		/// <summary>
 		/// Uploads 32 bits-per-pixel RGBA image data to the specified texture <paramref name="variable"/>.
@@ -233,7 +235,7 @@ namespace reshade
 		void get_technique_annotation_value(api::effect_technique technique, const char *name, float *values, size_t count, size_t array_index = 0) const final;
 		void get_technique_annotation_value(api::effect_technique technique, const char *name, int32_t *values, size_t count, size_t array_index = 0) const final;
 		void get_technique_annotation_value(api::effect_technique technique, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
-		const char *get_technique_annotation_string(api::effect_technique technique, const char *name) const final;
+		bool get_technique_annotation_string(api::effect_technique technique, const char *name, char *value, size_t *length) const final;
 
 		/// <summary>
 		/// Gets the status of a <paramref name="technique"/>.
@@ -243,6 +245,15 @@ namespace reshade
 		/// Enables or disable the specified <paramref name="technique"/>.
 		/// </summary>
 		void set_technique_enabled(api::effect_technique technique, bool enabled) final;
+
+		/// <summary>
+		/// Gets the value of global preprocessor definition.
+		/// </summary>
+		bool get_preprocessor_definition(const char *name, char *value, size_t *length) const final;
+		/// <summary>
+		/// Defines a global preprocessor definition to the specified <paramref name="value"/>.
+		/// </summary>
+		void set_preprocessor_definition(const char *name, const char *value) final;
 
 	protected:
 		runtime(api::device *device, api::command_queue *graphics_queue);
@@ -295,7 +306,7 @@ namespace reshade
 		void clear_effect_cache();
 
 		void update_effects();
-		void render_technique(api::command_list *cmd_list, technique &technique, api::resource back_buffer_resource, const api::framebuffer back_buffer_fbos[2]);
+		void render_technique(api::command_list *cmd_list, technique &technique, api::resource_view rtv, api::resource_view rtv_srgb);
 
 		void save_texture(const texture &texture);
 
@@ -358,13 +369,10 @@ namespace reshade
 		api::resource_view _empty_srv = {};
 		api::resource _effect_color_tex = {};
 		api::resource_view _effect_color_srv[2] = {};
+		std::vector<api::resource_view> _back_buffer_targets;
+		api::format _effect_stencil_format = api::format::unknown;
 		api::resource _effect_stencil_tex = {};
 		api::resource_view _effect_stencil_dsv = {};
-
-		api::render_pass   _back_buffer_passes[2] = {};
-		std::vector<api::framebuffer  > _back_buffer_fbos;
-		std::vector<api::framebuffer  > _effect_back_buffer_fbos;
-		std::vector<api::resource_view> _back_buffer_targets;
 
 		std::unordered_map<size_t, api::sampler> _effect_sampler_states;
 		std::unordered_map<std::string, std::pair<api::resource_view, api::resource_view>> _texture_semantic_bindings;
@@ -427,7 +435,7 @@ namespace reshade
 		void draw_technique_editor();
 
 		bool init_imgui_resources();
-		void render_imgui_draw_data(api::command_list *cmd_list, ImDrawData *draw_data, api::render_pass pass, api::framebuffer fbo);
+		void render_imgui_draw_data(api::command_list *cmd_list, ImDrawData *draw_data, api::resource_view rtv);
 		void destroy_imgui_resources();
 
 		#pragma region Overlay
@@ -456,7 +464,6 @@ namespace reshade
 
 		api::pipeline _imgui_pipeline = {};
 		api::pipeline_layout _imgui_pipeline_layout = {};
-		api::descriptor_set_layout _imgui_set_layouts[2] = {};
 		api::sampler  _imgui_sampler_state = {};
 
 		int _imgui_num_indices[4] = {};
@@ -465,8 +472,6 @@ namespace reshade
 		api::resource _imgui_vertices[4] = {};
 
 		api::resource _vr_overlay_tex = {};
-		api::framebuffer _vr_overlay_fbo = {};
-		api::render_pass _vr_overlay_pass = {};
 		api::resource_view _vr_overlay_target = {};
 		#pragma endregion
 

@@ -948,7 +948,7 @@ void reshade::runtime::draw_gui()
 
 		api::command_list *const cmd_list = _graphics_queue->get_immediate_command_list();
 		cmd_list->barrier(back_buffer_resource, api::resource_usage::present, api::resource_usage::render_target);
-		render_imgui_draw_data(cmd_list, draw_data, _back_buffer_passes[0], _back_buffer_fbos[back_buffer_index]);
+		render_imgui_draw_data(cmd_list, draw_data, _back_buffer_targets[back_buffer_index * 2]);
 		cmd_list->barrier(back_buffer_resource, api::resource_usage::render_target, api::resource_usage::present);
 	}
 
@@ -3272,10 +3272,8 @@ bool reshade::runtime::init_imgui_resources()
 			ranges[0].type = api::descriptor_type::sampler_with_resource_view;
 			ranges[0].dx_register_index = 0; // s0
 
-			_device->create_descriptor_set_layout(1, &ranges[0], true, &_imgui_set_layouts[0]);
-
 			layout_params[num_layout_params].type = api::pipeline_layout_param_type::push_descriptors;
-			layout_params[num_layout_params].descriptor_layout = _imgui_set_layouts[0];
+			layout_params[num_layout_params].push_descriptors = ranges[0];
 			num_layout_params++;
 		}
 		else
@@ -3283,19 +3281,15 @@ bool reshade::runtime::init_imgui_resources()
 			ranges[0].type = api::descriptor_type::sampler;
 			ranges[0].dx_register_index = 0; // s0
 
-			_device->create_descriptor_set_layout(1, &ranges[0], true, &_imgui_set_layouts[0]);
-
 			layout_params[num_layout_params].type = api::pipeline_layout_param_type::push_descriptors;
-			layout_params[num_layout_params].descriptor_layout = _imgui_set_layouts[0];
+			layout_params[num_layout_params].push_descriptors = ranges[0];
 			num_layout_params++;
 
 			ranges[1].type = api::descriptor_type::shader_resource_view;
 			ranges[1].dx_register_index = 0; // t0
 
-			_device->create_descriptor_set_layout(1, &ranges[1], true, &_imgui_set_layouts[1]);
-
 			layout_params[num_layout_params].type = api::pipeline_layout_param_type::push_descriptors;
-			layout_params[num_layout_params].descriptor_layout = _imgui_set_layouts[1];
+			layout_params[num_layout_params].push_descriptors = ranges[1];
 			num_layout_params++;
 		}
 
@@ -3396,7 +3390,7 @@ bool reshade::runtime::init_imgui_resources()
 	}
 
 	{	auto &rasterizer_state = pso_desc.graphics.rasterizer_state;
-		rasterizer_state.depth_clip_enable = true;
+		rasterizer_state.cull_mode = api::cull_mode::none;
 		rasterizer_state.scissor_enable = true;
 	}
 
@@ -3405,10 +3399,8 @@ bool reshade::runtime::init_imgui_resources()
 		depth_stencil_state.stencil_enable = false;
 	}
 
-	pso_desc.graphics.sample_mask = std::numeric_limits<uint32_t>::max();
-	pso_desc.graphics.viewport_count = 1;
 	pso_desc.graphics.topology = api::primitive_topology::triangle_list;
-	pso_desc.graphics.render_pass_template = _back_buffer_passes[0];
+	pso_desc.graphics.render_target_formats[0] = _back_buffer_format;
 
 	if (_device->create_pipeline(pso_desc, 0, nullptr, &_imgui_pipeline))
 	{
@@ -3420,7 +3412,7 @@ bool reshade::runtime::init_imgui_resources()
 		return false;
 	}
 }
-void reshade::runtime::render_imgui_draw_data(api::command_list *cmd_list, ImDrawData *draw_data, api::render_pass pass, api::framebuffer fbo)
+void reshade::runtime::render_imgui_draw_data(api::command_list *cmd_list, ImDrawData *draw_data, api::resource_view rtv)
 {
 	// Need to multi-buffer vertex data so not to modify data below when the previous frame is still in flight
 	const size_t buffer_index = _framecount % std::size(_imgui_vertices);
@@ -3486,7 +3478,10 @@ void reshade::runtime::render_imgui_draw_data(api::command_list *cmd_list, ImDra
 		_device->unmap_buffer_region(_imgui_vertices[buffer_index]);
 	}
 
-	cmd_list->begin_render_pass(pass, fbo);
+	api::render_pass_render_target_desc render_target = {};
+	render_target.view = rtv;
+
+	cmd_list->begin_render_pass(1, &render_target, nullptr);
 
 	// Setup render state
 	cmd_list->bind_pipeline(api::pipeline_stage::all_graphics, _imgui_pipeline);
@@ -3494,8 +3489,8 @@ void reshade::runtime::render_imgui_draw_data(api::command_list *cmd_list, ImDra
 	cmd_list->bind_index_buffer(_imgui_indices[buffer_index], 0, sizeof(ImDrawIdx));
 	cmd_list->bind_vertex_buffer(0, _imgui_vertices[buffer_index], 0, sizeof(ImDrawVert));
 
-	const float viewport[6] = { 0, 0, draw_data->DisplaySize.x, draw_data->DisplaySize.y, 0.0f, 1.0f };
-	cmd_list->bind_viewports(0, 1, viewport);
+	const api::viewport viewport = { 0, 0, draw_data->DisplaySize.x, draw_data->DisplaySize.y, 0.0f, 1.0f };
+	cmd_list->bind_viewports(0, 1, &viewport);
 
 	// Setup orthographic projection matrix
 	const bool flip_y = (_renderer_id & 0x10000) != 0 && !_is_vr;
@@ -3525,14 +3520,14 @@ void reshade::runtime::render_imgui_draw_data(api::command_list *cmd_list, ImDra
 			assert(cmd.TextureId != 0);
 			assert(cmd.UserCallback == nullptr);
 
-			int32_t scissor_rect[4] = {
+			const api::rect scissor_rect = {
 				static_cast<int32_t>(cmd.ClipRect.x - draw_data->DisplayPos.x),
 				static_cast<int32_t>(cmd.ClipRect.y - draw_data->DisplayPos.y),
 				static_cast<int32_t>(cmd.ClipRect.z - draw_data->DisplayPos.x),
 				static_cast<int32_t>(cmd.ClipRect.w - draw_data->DisplayPos.y)
 			};
 
-			cmd_list->bind_scissor_rects(0, 1, scissor_rect);
+			cmd_list->bind_scissor_rects(0, 1, &scissor_rect);
 
 			const api::resource_view srv = { (uint64_t)cmd.TextureId };
 			if (has_combined_sampler_and_view)
@@ -3578,10 +3573,6 @@ void reshade::runtime::destroy_imgui_resources()
 	_imgui_pipeline = {};
 	_device->destroy_pipeline_layout(_imgui_pipeline_layout);
 	_imgui_pipeline_layout = {};
-	_device->destroy_descriptor_set_layout(_imgui_set_layouts[0]);
-	_imgui_set_layouts[0] = {};
-	_device->destroy_descriptor_set_layout(_imgui_set_layouts[1]);
-	_imgui_set_layouts[1] = {};
 }
 
 #endif

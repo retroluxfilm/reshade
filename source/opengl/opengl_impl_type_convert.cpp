@@ -1018,10 +1018,10 @@ void reshade::opengl::convert_memory_heap_to_usage(const api::resource_desc &des
 		usage = GL_STATIC_DRAW;
 		break;
 	case api::memory_heap::cpu_to_gpu:
-		usage = (desc.flags & api::resource_flags::dynamic) == api::resource_flags::dynamic ? GL_DYNAMIC_DRAW : GL_STREAM_DRAW;
+		usage = (desc.flags & api::resource_flags::dynamic) != 0 ? GL_DYNAMIC_DRAW : GL_STREAM_DRAW;
 		break;
 	case api::memory_heap::gpu_to_cpu:
-		usage = (desc.flags & api::resource_flags::dynamic) == api::resource_flags::dynamic ? GL_DYNAMIC_READ : GL_STREAM_READ;
+		usage = (desc.flags & api::resource_flags::dynamic) != 0 ? GL_DYNAMIC_READ : GL_STREAM_READ;
 		break;
 	}
 }
@@ -1040,7 +1040,7 @@ void reshade::opengl::convert_memory_heap_to_flags(const api::resource_desc &des
 		break;
 	}
 
-	if ((desc.flags & api::resource_flags::dynamic) == api::resource_flags::dynamic)
+	if ((desc.flags & api::resource_flags::dynamic) != 0)
 		flags |= GL_DYNAMIC_STORAGE_BIT;
 }
 void reshade::opengl::convert_memory_heap_from_usage(api::resource_desc &desc, GLenum usage)
@@ -1880,42 +1880,4 @@ GLenum reshade::opengl::convert_shader_type(api::shader_stage type)
 		assert(false);
 		return GL_NONE;
 	}
-}
-
-auto   reshade::opengl::convert_buffer_type_to_aspect(GLenum type) -> api::attachment_type
-{
-	switch (type)
-	{
-	default:
-	case GL_COLOR:
-		return api::attachment_type::color;
-	case GL_DEPTH:
-		return api::attachment_type::depth;
-	case GL_STENCIL:
-		return api::attachment_type::stencil;
-	case GL_DEPTH_STENCIL:
-		return api::attachment_type::depth | api::attachment_type::stencil;
-	}
-}
-auto   reshade::opengl::convert_buffer_bits_to_aspect(GLbitfield mask) -> api::attachment_type
-{
-	api::attachment_type result = {};
-	if (mask & GL_COLOR_BUFFER_BIT)
-		result |= api::attachment_type::color;
-	if (mask & GL_DEPTH_BUFFER_BIT)
-		result |= api::attachment_type::depth;
-	if (mask & GL_STENCIL_BUFFER_BIT)
-		result |= api::attachment_type::stencil;
-	return result;
-}
-auto   reshade::opengl::convert_aspect_to_buffer_bits(api::attachment_type mask) -> GLbitfield
-{
-	GLbitfield result = 0;
-	if ((mask & api::attachment_type::color) == api::attachment_type::color)
-		result |= GL_COLOR_BUFFER_BIT;
-	if ((mask & api::attachment_type::depth) == api::attachment_type::depth)
-		result |= GL_DEPTH_BUFFER_BIT;
-	if ((mask & api::attachment_type::stencil) == api::attachment_type::stencil)
-		result |= GL_STENCIL_BUFFER_BIT;
-	return result;
 }

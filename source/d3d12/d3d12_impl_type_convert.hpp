@@ -9,34 +9,22 @@
 
 namespace reshade::d3d12
 {
+	static_assert(sizeof(D3D12_BOX) == sizeof(api::subresource_box));
+	static_assert(sizeof(D3D12_RECT) == sizeof(api::rect));
+	static_assert(sizeof(D3D12_VIEWPORT) == sizeof(api::viewport));
+
 	extern const GUID extra_data_guid;
 
-	struct render_pass_impl
+	struct pipeline_layout_impl
 	{
-		UINT count;
-		DXGI_FORMAT rtv_format[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
-		DXGI_FORMAT dsv_format;
-		DXGI_SAMPLE_DESC sample_desc;
-		std::vector<api::attachment_desc> attachments;
-	};
-
-	struct framebuffer_impl
-	{
-		UINT count;
-		D3D12_CPU_DESCRIPTOR_HANDLE rtv[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
-		D3D12_CPU_DESCRIPTOR_HANDLE dsv;
-		BOOL rtv_is_single_handle_to_range;
+		std::vector<api::pipeline_layout_param> params;
+		std::vector<std::vector<api::descriptor_range>> ranges;
 	};
 
 	struct pipeline_graphics_impl
 	{
 		D3D12_PRIMITIVE_TOPOLOGY topology;
 		FLOAT blend_constant[4];
-	};
-
-	struct descriptor_set_layout_impl
-	{
-		std::vector<api::descriptor_range> ranges;
 	};
 
 	auto convert_format(api::format format) -> DXGI_FORMAT;
@@ -98,4 +86,14 @@ namespace reshade::d3d12
 	auto convert_descriptor_type_to_heap_type(api::descriptor_type type) -> D3D12_DESCRIPTOR_HEAP_TYPE;
 
 	auto convert_shader_visibility(D3D12_SHADER_VISIBILITY visibility) -> api::shader_stage;
+
+	auto convert_render_pass_load_op(api::render_pass_load_op value) -> D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE;
+	auto convert_render_pass_load_op(D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE value) -> api::render_pass_load_op;
+	auto convert_render_pass_store_op(api::render_pass_store_op value) -> D3D12_RENDER_PASS_ENDING_ACCESS_TYPE;
+	auto convert_render_pass_store_op(D3D12_RENDER_PASS_ENDING_ACCESS_TYPE value) -> api::render_pass_store_op;
+
+	inline auto to_handle(ID3D12Resource *ptr) { return api::resource { reinterpret_cast<uintptr_t>(ptr) }; }
+	inline auto to_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle) { return api::resource_view { static_cast<uint64_t>(handle.ptr) }; }
+	inline auto to_handle(ID3D12PipelineState *ptr) { return api::pipeline { reinterpret_cast<uintptr_t>(ptr) }; }
+	inline auto to_handle(ID3D12RootSignature *ptr) { return api::pipeline_layout { reinterpret_cast<uintptr_t>(ptr) }; }
 }

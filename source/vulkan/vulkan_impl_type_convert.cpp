@@ -426,30 +426,33 @@ auto reshade::vulkan::convert_usage_to_access(api::resource_usage state) -> VkAc
 		return VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
 
 	VkAccessFlags result = 0;
-	if ((state & api::resource_usage::depth_stencil_read) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::depth_stencil_read) != 0)
 		result |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-	if ((state & api::resource_usage::depth_stencil_write) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::depth_stencil_write) != 0)
 		result |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-	if ((state & api::resource_usage::render_target) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::render_target) != 0)
 		result |= VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-	if ((state & api::resource_usage::shader_resource) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::shader_resource) != 0)
 		result |= VK_ACCESS_SHADER_READ_BIT;
-	if ((state & api::resource_usage::unordered_access) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::unordered_access) != 0)
 		result |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-	if ((state & (api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != api::resource_usage::undefined)
+	if ((state & (api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != 0)
 		result |= VK_ACCESS_TRANSFER_WRITE_BIT;
-	if ((state & (api::resource_usage::copy_source | api::resource_usage::resolve_source)) != api::resource_usage::undefined)
+	if ((state & (api::resource_usage::copy_source | api::resource_usage::resolve_source)) != 0)
 		result |= VK_ACCESS_TRANSFER_READ_BIT;
-	if ((state & api::resource_usage::index_buffer) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::index_buffer) != 0)
 		result |= VK_ACCESS_INDEX_READ_BIT;
-	if ((state & api::resource_usage::vertex_buffer) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::vertex_buffer) != 0)
 		result |= VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-	if ((state & api::resource_usage::constant_buffer) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::constant_buffer) != 0)
 		result |= VK_ACCESS_UNIFORM_READ_BIT;
 	return result;
 }
-auto reshade::vulkan::convert_usage_to_image_layout(api::resource_usage state) -> VkImageLayout
+auto reshade::vulkan::convert_usage_to_image_layout(api::resource_usage state, bool src_stage) -> VkImageLayout
 {
+	if (src_stage && state == api::resource_usage::cpu_access)
+		return VK_IMAGE_LAYOUT_PREINITIALIZED;
+
 	switch (state)
 	{
 	case api::resource_usage::undefined:
@@ -490,55 +493,55 @@ auto reshade::vulkan::convert_usage_to_pipeline_stage(api::resource_usage state,
 		return VK_PIPELINE_STAGE_HOST_BIT;
 
 	VkPipelineStageFlags result = 0;
-	if ((state & api::resource_usage::depth_stencil_read) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::depth_stencil_read) != 0)
 		result |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-	if ((state & api::resource_usage::depth_stencil_write) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::depth_stencil_write) != 0)
 		result |= VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-	if ((state & api::resource_usage::render_target) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::render_target) != 0)
 		result |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	if ((state & (api::resource_usage::shader_resource_pixel | api::resource_usage::constant_buffer)) != api::resource_usage::undefined)
+	if ((state & (api::resource_usage::shader_resource_pixel | api::resource_usage::constant_buffer)) != 0)
 		result |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-	if ((state & (api::resource_usage::shader_resource_non_pixel | api::resource_usage::constant_buffer)) != api::resource_usage::undefined)
+	if ((state & (api::resource_usage::shader_resource_non_pixel | api::resource_usage::constant_buffer)) != 0)
 		result |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | (enabled_features.tessellationShader ? VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT | VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT : 0) | (enabled_features.geometryShader ? VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT : 0) | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-	if ((state & api::resource_usage::unordered_access) != api::resource_usage::undefined)
+	if ((state & api::resource_usage::unordered_access) != 0)
 		result |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-	if ((state & (api::resource_usage::copy_dest | api::resource_usage::copy_source | api::resource_usage::resolve_dest | api::resource_usage::resolve_source)) != api::resource_usage::undefined)
+	if ((state & (api::resource_usage::copy_dest | api::resource_usage::copy_source | api::resource_usage::resolve_dest | api::resource_usage::resolve_source)) != 0)
 		result |= VK_PIPELINE_STAGE_TRANSFER_BIT;
-	if ((state & (api::resource_usage::index_buffer | api::resource_usage::vertex_buffer)) != api::resource_usage::undefined)
+	if ((state & (api::resource_usage::index_buffer | api::resource_usage::vertex_buffer)) != 0)
 		result |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
 	return result;
 }
 
 void reshade::vulkan::convert_usage_to_image_usage_flags(api::resource_usage usage, VkImageUsageFlags &image_flags)
 {
-	if ((usage & (api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != api::resource_usage::undefined)
+	if ((usage & (api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != 0)
 		image_flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	else
 		image_flags &= ~VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-	if ((usage & (api::resource_usage::copy_source | api::resource_usage::resolve_source)) != api::resource_usage::undefined)
+	if ((usage & (api::resource_usage::copy_source | api::resource_usage::resolve_source)) != 0)
 		image_flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	else
 		image_flags &= ~VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
-	if ((usage & api::resource_usage::depth_stencil) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::depth_stencil) != 0)
 		// Add transfer destination usage as well to support clearing via 'vkCmdClearDepthStencilImage'
 		image_flags |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	else
 		image_flags &= ~VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 
-	if ((usage & api::resource_usage::render_target) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::render_target) != 0)
 		// Add transfer destination usage as well to support clearing via 'vkCmdClearColorImage'
 		image_flags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	else
 		image_flags &= ~VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-	if ((usage & api::resource_usage::shader_resource) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::shader_resource) != 0)
 		image_flags |= VK_IMAGE_USAGE_SAMPLED_BIT;
 	else
 		image_flags &= ~VK_IMAGE_USAGE_SAMPLED_BIT;
 
-	if ((usage & api::resource_usage::unordered_access) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::unordered_access) != 0)
 		image_flags |= VK_IMAGE_USAGE_STORAGE_BIT;
 	else
 		image_flags &= ~VK_IMAGE_USAGE_STORAGE_BIT;
@@ -562,37 +565,37 @@ void reshade::vulkan::convert_image_usage_flags_to_usage(const VkImageUsageFlags
 }
 void reshade::vulkan::convert_usage_to_buffer_usage_flags(api::resource_usage usage, VkBufferUsageFlags &buffer_flags)
 {
-	if ((usage & api::resource_usage::index_buffer) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::index_buffer) != 0)
 		buffer_flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 
-	if ((usage & api::resource_usage::vertex_buffer) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::vertex_buffer) != 0)
 		buffer_flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 
-	if ((usage & api::resource_usage::constant_buffer) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::constant_buffer) != 0)
 		buffer_flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-	if ((usage & api::resource_usage::shader_resource) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::shader_resource) != 0)
 		buffer_flags |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
 
-	if ((usage & api::resource_usage::unordered_access) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::unordered_access) != 0)
 		buffer_flags |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 	else
 		buffer_flags &= ~(VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-	if ((usage & api::resource_usage::copy_dest) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::copy_dest) != 0)
 		buffer_flags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-	if ((usage & api::resource_usage::copy_source) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::copy_source) != 0)
 		buffer_flags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 	else
 		buffer_flags &= ~VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -907,22 +910,22 @@ void reshade::vulkan::convert_resource_desc(const api::resource_desc &desc, VkIm
 		desc.texture.format != api::format_to_default_typed(desc.texture.format))
 		create_info.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
 
-	if ((desc.flags & api::resource_flags::sparse_binding) == api::resource_flags::sparse_binding)
+	if ((desc.flags & api::resource_flags::sparse_binding) != 0)
 		create_info.flags |= VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
 	else
 		create_info.flags &= ~(VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
 
-	if ((desc.flags & api::resource_flags::cube_compatible) == api::resource_flags::cube_compatible)
+	if ((desc.flags & api::resource_flags::cube_compatible) != 0)
 		create_info.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 	else
 		create_info.flags &= ~VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 
 	// Mipmap generation is using 'vkCmdBlitImage' and therefore needs transfer usage flags (see 'command_list_impl::generate_mipmaps')
-	if ((desc.flags & api::resource_flags::generate_mipmaps) == api::resource_flags::generate_mipmaps)
+	if ((desc.flags & api::resource_flags::generate_mipmaps) != 0)
 		create_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
 	// Dynamic resources do not exist in Vulkan
-	assert((desc.flags & api::resource_flags::dynamic) != api::resource_flags::dynamic);
+	assert((desc.flags & api::resource_flags::dynamic) == 0);
 }
 void reshade::vulkan::convert_resource_desc(const api::resource_desc &desc, VkBufferCreateInfo &create_info)
 {
@@ -932,7 +935,7 @@ void reshade::vulkan::convert_resource_desc(const api::resource_desc &desc, VkBu
 	convert_usage_to_buffer_usage_flags(desc.usage, create_info.usage);
 
 	// Dynamic resources do not exist in Vulkan
-	assert((desc.flags & api::resource_flags::dynamic) != api::resource_flags::dynamic);
+	assert((desc.flags & api::resource_flags::dynamic) == 0);
 }
 reshade::api::resource_desc reshade::vulkan::convert_resource_desc(const VkImageCreateInfo &create_info)
 {
@@ -992,6 +995,18 @@ reshade::api::resource_desc reshade::vulkan::convert_resource_desc(const VkImage
 	if (create_info.mipLevels > 1 && (create_info.usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) == (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
 		desc.flags |= api::resource_flags::generate_mipmaps;
 
+	const auto external_memory_info = find_in_structure_chain<VkExternalMemoryImageCreateInfo>(create_info.pNext, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
+	if (external_memory_info != nullptr)
+	{
+		if (external_memory_info->handleTypes != 0)
+		{
+			desc.flags |= api::resource_flags::shared;
+
+			if (external_memory_info->handleTypes & (VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT | VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT | VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_HEAP_BIT | VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT))
+				desc.flags |= api::resource_flags::shared_nt_handle;
+		}
+	}
+
 	return desc;
 }
 reshade::api::resource_desc reshade::vulkan::convert_resource_desc(const VkBufferCreateInfo &create_info)
@@ -1000,6 +1015,19 @@ reshade::api::resource_desc reshade::vulkan::convert_resource_desc(const VkBuffe
 	desc.type = api::resource_type::buffer;
 	desc.buffer.size = create_info.size;
 	convert_buffer_usage_flags_to_usage(create_info.usage, desc.usage);
+
+	const auto external_memory_info = find_in_structure_chain<VkExternalMemoryBufferCreateInfo>(create_info.pNext, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO);
+	if (external_memory_info != nullptr)
+	{
+		if (external_memory_info->handleTypes != 0)
+		{
+			desc.flags |= api::resource_flags::shared;
+
+			if (external_memory_info->handleTypes & (VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT | VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT | VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_HEAP_BIT | VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT))
+				desc.flags |= api::resource_flags::shared_nt_handle;
+		}
+	}
+
 	return desc;
 }
 
@@ -1108,7 +1136,7 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 	api::pipeline_desc desc = { api::pipeline_stage::all_compute };
 	desc.layout = { (uint64_t)create_info.layout };
 
-	const auto module_data = get_user_data_for_object<VK_OBJECT_TYPE_SHADER_MODULE>(create_info.stage.module);
+	const auto module_data = get_private_data_for_object<VK_OBJECT_TYPE_SHADER_MODULE>(create_info.stage.module);
 
 	assert(create_info.stage.stage == VK_SHADER_STAGE_COMPUTE_BIT);
 
@@ -1129,7 +1157,7 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 	{
 		const VkPipelineShaderStageCreateInfo &stage = create_info.pStages[i];
 
-		const auto module_data = get_user_data_for_object<VK_OBJECT_TYPE_SHADER_MODULE>(stage.module);
+		const auto module_data = get_private_data_for_object<VK_OBJECT_TYPE_SHADER_MODULE>(stage.module);
 
 		switch (stage.stage)
 		{
@@ -1225,6 +1253,7 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 		desc.graphics.rasterizer_state.depth_clip_enable = !rasterization_state_info.depthClampEnable;
 		desc.graphics.rasterizer_state.scissor_enable = true;
 
+#ifdef VK_EXT_conservative_rasterization
 		const auto conservative_rasterization_info = find_in_structure_chain<VkPipelineRasterizationConservativeStateCreateInfoEXT>(
 			rasterization_state_info.pNext, VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT);
 
@@ -1232,6 +1261,7 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 		{
 			desc.graphics.rasterizer_state.conservative_rasterization = static_cast<uint32_t>(conservative_rasterization_info->conservativeRasterizationMode);
 		}
+#endif
 	}
 
 	if (create_info.pMultisampleState != nullptr)
@@ -1245,6 +1275,8 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 			desc.graphics.sample_mask = *multisample_state_info.pSampleMask;
 		else
 			desc.graphics.sample_mask = std::numeric_limits<uint32_t>::max();
+
+		desc.graphics.sample_count = static_cast<uint32_t>(multisample_state_info.rasterizationSamples);
 	}
 
 	if (create_info.pDepthStencilState != nullptr)
@@ -1290,6 +1322,44 @@ reshade::api::pipeline_desc reshade::vulkan::device_impl::convert_pipeline_desc(
 			desc.graphics.blend_state.render_target_write_mask[a] = static_cast<uint8_t>(attachment.colorWriteMask);
 		}
 	}
+
+	if (create_info.renderPass != VK_NULL_HANDLE)
+	{
+		const auto render_pass_data = get_private_data_for_object<VK_OBJECT_TYPE_RENDER_PASS>(create_info.renderPass);
+
+		const auto &subpass = render_pass_data->subpasses[create_info.subpass];
+
+		if (subpass.pDepthStencilAttachment != nullptr)
+		{
+			const uint32_t a = subpass.pDepthStencilAttachment->attachment;
+			if (a != VK_ATTACHMENT_UNUSED)
+				desc.graphics.depth_stencil_format = convert_format(render_pass_data->attachments[a].format);
+		}
+
+		for (uint32_t i = 0; i < 8 && i < subpass.colorAttachmentCount; ++i)
+		{
+			const uint32_t a = subpass.pColorAttachments[i].attachment;
+			if (a != VK_ATTACHMENT_UNUSED)
+				desc.graphics.render_target_formats[i] = convert_format(render_pass_data->attachments[a].format);
+		}
+	}
+#ifdef VK_KHR_dynamic_rendering
+	else
+	{
+		const auto dynamic_rendering_info = find_in_structure_chain<VkPipelineRenderingCreateInfoKHR>(create_info.pNext, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR);
+
+		if (dynamic_rendering_info != nullptr)
+		{
+			if (dynamic_rendering_info->depthAttachmentFormat != VK_FORMAT_UNDEFINED)
+				desc.graphics.depth_stencil_format = convert_format(dynamic_rendering_info->depthAttachmentFormat);
+			else
+				desc.graphics.depth_stencil_format = convert_format(dynamic_rendering_info->stencilAttachmentFormat);
+
+			for (uint32_t i = 0; i < 8 && i < dynamic_rendering_info->colorAttachmentCount; ++i)
+				desc.graphics.render_target_formats[i] = convert_format(dynamic_rendering_info->pColorAttachmentFormats[i]);
+		}
+	}
+#endif
 
 	return desc;
 }
@@ -1530,6 +1600,7 @@ auto reshade::vulkan::convert_primitive_topology(VkPrimitiveTopology value) -> a
 		return api::primitive_topology::patch_list_01_cp;
 	}
 }
+
 auto reshade::vulkan::convert_query_type(api::query_type type) -> VkQueryType
 {
 	switch (type)
@@ -1593,72 +1664,62 @@ auto reshade::vulkan::convert_descriptor_type(VkDescriptorType value) -> api::de
 		return static_cast<api::descriptor_type>(value);
 	}
 }
-auto reshade::vulkan::convert_attachment_type(api::attachment_type value) -> VkImageAspectFlags
-{
-	VkImageAspectFlags flags = 0;
-	if ((value & api::attachment_type::color) == api::attachment_type::color)
-		flags |= VK_IMAGE_ASPECT_COLOR_BIT;
-	if ((value & api::attachment_type::depth) == api::attachment_type::depth)
-		flags |= VK_IMAGE_ASPECT_DEPTH_BIT;
-	if ((value & api::attachment_type::stencil) == api::attachment_type::stencil)
-		flags |= VK_IMAGE_ASPECT_STENCIL_BIT;
-	return flags;
-}
-auto reshade::vulkan::convert_attachment_load_op(api::attachment_load_op value) -> VkAttachmentLoadOp
+
+auto reshade::vulkan::convert_render_pass_load_op(api::render_pass_load_op value) -> VkAttachmentLoadOp
 {
 	switch (value)
 	{
-	case api::attachment_load_op::load:
+	case api::render_pass_load_op::load:
 		return VK_ATTACHMENT_LOAD_OP_LOAD;
-	case api::attachment_load_op::clear:
+	case api::render_pass_load_op::clear:
 		return VK_ATTACHMENT_LOAD_OP_CLEAR;
 	default:
 		assert(false);
 		[[fallthrough]];
-	case api::attachment_load_op::discard:
-	case api::attachment_load_op::dont_care:
+	case api::render_pass_load_op::discard:
+	case api::render_pass_load_op::dont_care:
 		return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 	}
 }
-auto reshade::vulkan::convert_attachment_load_op(VkAttachmentLoadOp value) -> api::attachment_load_op
+auto reshade::vulkan::convert_render_pass_load_op(VkAttachmentLoadOp value) -> api::render_pass_load_op
 {
 	switch (value)
 	{
 	case VK_ATTACHMENT_LOAD_OP_LOAD:
-		return api::attachment_load_op::load;
+		return api::render_pass_load_op::load;
 	case VK_ATTACHMENT_LOAD_OP_CLEAR:
-		return api::attachment_load_op::clear;
+		return api::render_pass_load_op::clear;
 	default:
 		assert(false);
 		[[fallthrough]];
 	case VK_ATTACHMENT_LOAD_OP_DONT_CARE:
-		return api::attachment_load_op::dont_care;
+		return api::render_pass_load_op::dont_care;
 	}
 }
-auto reshade::vulkan::convert_attachment_store_op(api::attachment_store_op value) -> VkAttachmentStoreOp
+auto reshade::vulkan::convert_render_pass_store_op(api::render_pass_store_op value) -> VkAttachmentStoreOp
 {
 	switch (value)
 	{
-	case api::attachment_store_op::store:
+	case api::render_pass_store_op::store:
 		return VK_ATTACHMENT_STORE_OP_STORE;
 	default:
 		assert(false);
 		[[fallthrough]];
-	case api::attachment_store_op::discard:
-	case api::attachment_store_op::dont_care:
+	case api::render_pass_store_op::discard:
+	case api::render_pass_store_op::dont_care:
 		return VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	}
 }
-auto reshade::vulkan::convert_attachment_store_op(VkAttachmentStoreOp value) -> api::attachment_store_op
+auto reshade::vulkan::convert_render_pass_store_op(VkAttachmentStoreOp value) -> api::render_pass_store_op
 {
 	switch (value)
 	{
 	case VK_ATTACHMENT_STORE_OP_STORE:
-		return api::attachment_store_op::store;
+		return api::render_pass_store_op::store;
 	default:
 		assert(false);
 		[[fallthrough]];
 	case VK_ATTACHMENT_STORE_OP_DONT_CARE:
-		return api::attachment_store_op::dont_care;
+		return api::render_pass_store_op::dont_care;
 	}
 }

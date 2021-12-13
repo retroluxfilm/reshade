@@ -12,6 +12,8 @@
 
 #define vk _dispatch_table
 
+extern bool is_windows7();
+
 inline VkImageAspectFlags aspect_flags_from_format(VkFormat format)
 {
 	if (format >= VK_FORMAT_D16_UNORM && format <= VK_FORMAT_D32_SFLOAT)
@@ -133,6 +135,12 @@ reshade::vulkan::device_impl::~device_impl()
 	unload_addons();
 #endif
 
+	for (const auto &render_pass_data : _render_pass_lookup)
+	{
+		vk.DestroyRenderPass(_orig, render_pass_data.second.renderPass, nullptr);
+		vk.DestroyFramebuffer(_orig, render_pass_data.second.framebuffer, nullptr);
+	}
+
 	vk.DestroyPrivateDataSlotEXT(_orig, _private_data_slot, nullptr);
 
 	vk.DestroyDescriptorPool(_orig, _descriptor_pool, nullptr);
@@ -187,6 +195,10 @@ bool reshade::vulkan::device_impl::check_capability(api::device_caps capability)
 		return _enabled_features.samplerAnisotropy;
 	case api::device_caps::sampler_with_resource_view:
 		return true;
+	case api::device_caps::shared_resource:
+		return true;
+	case api::device_caps::shared_resource_nt_handle:
+		return !is_windows7();
 	default:
 		return false;
 	}
@@ -201,24 +213,18 @@ bool reshade::vulkan::device_impl::check_format_support(api::format format, api:
 	props.optimalTilingFeatures = 0;
 	_instance_dispatch_table.GetPhysicalDeviceFormatProperties(_physical_device, vk_format, &props);
 
-	if ((usage & api::resource_usage::depth_stencil) != api::resource_usage::undefined &&
-		(props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
+	if ((usage & api::resource_usage::depth_stencil) != 0 && (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
 		return false;
-	if ((usage & api::resource_usage::render_target) != api::resource_usage::undefined &&
-		(props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) == 0)
+	if ((usage & api::resource_usage::render_target) != 0 && (props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) == 0)
 		return false;
-	if ((usage & api::resource_usage::shader_resource) != api::resource_usage::undefined &&
-		(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0)
+	if ((usage & api::resource_usage::shader_resource) != 0 && (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0)
 		return false;
-	if ((usage & api::resource_usage::unordered_access) != api::resource_usage::undefined &&
-		(props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) == 0)
+	if ((usage & api::resource_usage::unordered_access) != 0 && (props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) == 0)
 		return false;
 
-	if ((usage & (api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != api::resource_usage::undefined &&
-		(props.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) == 0)
+	if ((usage & (api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != 0 && (props.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) == 0)
 		return false;
-	if ((usage & (api::resource_usage::copy_source | api::resource_usage::resolve_source)) != api::resource_usage::undefined &&
-		(props.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) == 0)
+	if ((usage & (api::resource_usage::copy_source | api::resource_usage::resolve_source)) != 0 && (props.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) == 0)
 		return false;
 
 	return true;
@@ -229,6 +235,7 @@ bool reshade::vulkan::device_impl::create_sampler(const api::sampler_desc &desc,
 	VkSamplerCreateInfo create_info { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
 	create_info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
 
+#ifdef VK_EXT_custom_border_color
 	VkSamplerCustomBorderColorCreateInfoEXT border_color_info { VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT };
 	if (_custom_border_color_ext && (
 		desc.border_color[0] != 0.0f || desc.border_color[1] != 0.0f || desc.border_color[2] != 0.0f || desc.border_color[3] != 0.0f))
@@ -236,6 +243,7 @@ bool reshade::vulkan::device_impl::create_sampler(const api::sampler_desc &desc,
 		create_info.pNext = &border_color_info;
 		create_info.borderColor = VK_BORDER_COLOR_FLOAT_CUSTOM_EXT;
 	}
+#endif
 
 	convert_sampler_desc(desc, create_info);
 
@@ -256,9 +264,11 @@ void reshade::vulkan::device_impl::destroy_sampler(api::sampler handle)
 	vk.DestroySampler(_orig, (VkSampler)handle.handle, nullptr);
 }
 
-bool reshade::vulkan::device_impl::create_resource(const api::resource_desc &desc, const api::subresource_data *initial_data, api::resource_usage initial_state, api::resource *out_handle)
+bool reshade::vulkan::device_impl::create_resource(const api::resource_desc &desc, const api::subresource_data *initial_data, api::resource_usage initial_state, api::resource *out_handle, HANDLE *shared_handle)
 {
-	assert((desc.usage & initial_state) == initial_state || initial_state == api::resource_usage::cpu_access);
+	*out_handle = { 0 };
+
+	assert((desc.usage & initial_state) == initial_state || initial_state == api::resource_usage::general || initial_state == api::resource_usage::cpu_access);
 
 	VmaAllocation allocation = VMA_NULL;
 	VmaAllocationCreateInfo alloc_info = {};
@@ -281,6 +291,42 @@ bool reshade::vulkan::device_impl::create_resource(const api::resource_desc &des
 		break;
 	}
 
+	VkExternalMemoryHandleTypeFlagBits handle_type = {};
+	union
+	{
+		VkExportMemoryAllocateInfo export_info;
+		VkImportMemoryWin32HandleInfoKHR import_info;
+	} import_export_info;
+
+	const bool is_shared = (desc.flags & api::resource_flags::shared) != 0;
+	if (is_shared)
+	{
+		if (shared_handle == nullptr)
+			return false;
+
+		if ((desc.flags & api::resource_flags::shared_nt_handle) != 0)
+			handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+		else
+			handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT;
+
+		if (*shared_handle != nullptr)
+		{
+			assert(initial_data == nullptr);
+
+			import_export_info.import_info = { VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR };
+			import_export_info.import_info.handleType = handle_type;
+			import_export_info.import_info.handle = *shared_handle;
+		}
+		else
+		{
+			if (vk.GetMemoryWin32HandleKHR == nullptr)
+				return false;
+
+			import_export_info.export_info = { VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO };
+			import_export_info.export_info.handleTypes = handle_type;
+		}
+	}
+
 	switch (desc.type)
 	{
 		case api::resource_type::buffer:
@@ -292,19 +338,68 @@ bool reshade::vulkan::device_impl::create_resource(const api::resource_desc &des
 			if (create_info.usage == 0 || initial_data != nullptr)
 				create_info.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
+			VkExternalMemoryBufferCreateInfo external_memory_info;
+			if (is_shared)
+			{
+				external_memory_info = { VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO };
+				external_memory_info.handleTypes = handle_type;
+				create_info.pNext = &external_memory_info;
+			}
+
 			if (VkBuffer object = VK_NULL_HANDLE;
-				(desc.heap == api::memory_heap::unknown ?
-				 vk.CreateBuffer(_orig, &create_info, nullptr, &object) :
-				 vmaCreateBuffer(_alloc, &create_info, &alloc_info, &object, &allocation, nullptr)) == VK_SUCCESS)
+				(desc.heap == api::memory_heap::unknown || is_shared ?
+					 vk.CreateBuffer(_orig, &create_info, nullptr, &object) :
+					 vmaCreateBuffer(_alloc, &create_info, &alloc_info, &object, &allocation, nullptr)) == VK_SUCCESS)
 			{
 				object_data<VK_OBJECT_TYPE_BUFFER> data;
 				data.allocation = allocation;
 				data.create_info = create_info;
 
-				VmaAllocationInfo allocation_info;
-				vmaGetAllocationInfo(_alloc, allocation, &allocation_info);
-				data.memory = allocation_info.deviceMemory;
-				data.memory_offset = allocation_info.offset;
+				if (is_shared)
+				{
+#ifdef VK_KHR_external_memory_win32
+					if (vk.GetMemoryWin32HandleKHR == nullptr)
+#endif
+						break;
+
+#ifdef VK_KHR_external_memory_win32
+					VkMemoryRequirements reqs = {};
+					vk.GetBufferMemoryRequirements(_orig, object, &reqs);
+
+					VkMemoryAllocateInfo mem_alloc_info { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &import_export_info };
+					mem_alloc_info.allocationSize = reqs.size;
+					vmaFindMemoryTypeIndex(_alloc, reqs.memoryTypeBits, &alloc_info, &mem_alloc_info.memoryTypeIndex);
+
+					if (vk.AllocateMemory(_orig, &mem_alloc_info, nullptr, &data.memory) != VK_SUCCESS)
+					{
+						vk.DestroyBuffer(_orig, object, nullptr);
+						break;
+					}
+
+					vk.BindBufferMemory(_orig, object, data.memory, data.memory_offset);
+
+					if (*shared_handle == nullptr)
+					{
+						VkMemoryGetWin32HandleInfoKHR handle_info { VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR };
+						handle_info.memory = data.memory;
+						handle_info.handleType = handle_type;
+
+						if (vk.GetMemoryWin32HandleKHR(_orig, &handle_info, shared_handle) != VK_SUCCESS)
+						{
+							vk.DestroyBuffer(_orig, object, nullptr);
+							vk.FreeMemory(_orig, data.memory, nullptr);
+							break;
+						}
+					}
+#endif
+				}
+				else if (allocation != VMA_NULL)
+				{
+					VmaAllocationInfo allocation_info;
+					vmaGetAllocationInfo(_alloc, allocation, &allocation_info);
+					data.memory = allocation_info.deviceMemory;
+					data.memory_offset = allocation_info.offset;
+				}
 
 				register_object<VK_OBJECT_TYPE_BUFFER>(object, std::move(data));
 
@@ -332,19 +427,68 @@ bool reshade::vulkan::device_impl::create_resource(const api::resource_desc &des
 			if (desc.heap == api::memory_heap::gpu_to_cpu || desc.heap == api::memory_heap::cpu_only)
 				create_info.tiling = VK_IMAGE_TILING_LINEAR;
 
+			VkExternalMemoryImageCreateInfo external_memory_info;
+			if (is_shared)
+			{
+				external_memory_info = { VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
+				external_memory_info.handleTypes = handle_type;
+				create_info.pNext = &external_memory_info;
+			}
+
 			if (VkImage object = VK_NULL_HANDLE;
-				(desc.heap == api::memory_heap::unknown ?
-				 vk.CreateImage(_orig, &create_info, nullptr, &object) :
-				 vmaCreateImage(_alloc, &create_info, &alloc_info, &object, &allocation, nullptr)) == VK_SUCCESS)
+				(desc.heap == api::memory_heap::unknown || is_shared ?
+					 vk.CreateImage(_orig, &create_info, nullptr, &object) :
+					 vmaCreateImage(_alloc, &create_info, &alloc_info, &object, &allocation, nullptr)) == VK_SUCCESS)
 			{
 				object_data<VK_OBJECT_TYPE_IMAGE> data;
 				data.allocation = allocation;
 				data.create_info = create_info;
 
-				VmaAllocationInfo allocation_info;
-				vmaGetAllocationInfo(_alloc, allocation, &allocation_info);
-				data.memory = allocation_info.deviceMemory;
-				data.memory_offset = allocation_info.offset;
+				if (is_shared)
+				{
+#ifdef VK_KHR_external_memory_win32
+					if (vk.GetMemoryWin32HandleKHR == nullptr)
+#endif
+						break;
+
+#ifdef VK_KHR_external_memory_win32
+					VkMemoryRequirements reqs = {};
+					vk.GetImageMemoryRequirements(_orig, object, &reqs);
+
+					VkMemoryAllocateInfo mem_alloc_info { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &import_export_info };
+					mem_alloc_info.allocationSize = reqs.size;
+					vmaFindMemoryTypeIndex(_alloc, reqs.memoryTypeBits, &alloc_info, &mem_alloc_info.memoryTypeIndex);
+
+					if (vk.AllocateMemory(_orig, &mem_alloc_info, nullptr, &data.memory) != VK_SUCCESS)
+					{
+						vk.DestroyImage(_orig, object, nullptr);
+						break;
+					}
+
+					vk.BindImageMemory(_orig, object, data.memory, data.memory_offset);
+
+					if (*shared_handle == nullptr)
+					{
+						VkMemoryGetWin32HandleInfoKHR handle_info { VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR };
+						handle_info.memory = data.memory;
+						handle_info.handleType = handle_type;
+
+						if (vk.GetMemoryWin32HandleKHR(_orig, &handle_info, shared_handle) != VK_SUCCESS)
+						{
+							vk.DestroyImage(_orig, object, nullptr);
+							vk.FreeMemory(_orig, data.memory, nullptr);
+							break;
+						}
+					}
+#endif
+				}
+				else if (allocation != VMA_NULL)
+				{
+					VmaAllocationInfo allocation_info;
+					vmaGetAllocationInfo(_alloc, allocation, &allocation_info);
+					data.memory = allocation_info.deviceMemory;
+					data.memory_offset = allocation_info.offset;
+				}
 
 				register_object<VK_OBJECT_TYPE_IMAGE>(object, std::move(data));
 
@@ -392,7 +536,6 @@ bool reshade::vulkan::device_impl::create_resource(const api::resource_desc &des
 		}
 	}
 
-	*out_handle = { 0 };
 	return false;
 }
 void reshade::vulkan::device_impl::destroy_resource(api::resource handle)
@@ -404,7 +547,7 @@ void reshade::vulkan::device_impl::destroy_resource(api::resource handle)
 		offsetof(object_data<VK_OBJECT_TYPE_IMAGE>, allocation ) == offsetof(object_data<VK_OBJECT_TYPE_BUFFER>, allocation ) &&
 		offsetof(object_data<VK_OBJECT_TYPE_IMAGE>, create_info) == offsetof(object_data<VK_OBJECT_TYPE_BUFFER>, create_info));
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)handle.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)handle.handle);
 	if (data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO) // Structure type is at the same offset in both image and buffer object data structures
 	{
 		const VmaAllocation allocation = data->allocation;
@@ -412,9 +555,16 @@ void reshade::vulkan::device_impl::destroy_resource(api::resource handle)
 		unregister_object<VK_OBJECT_TYPE_IMAGE>((VkImage)handle.handle);
 
 		if (allocation == VMA_NULL)
+		{
 			vk.DestroyImage(_orig, (VkImage)handle.handle, nullptr);
+
+			if (data->memory != VK_NULL_HANDLE)
+				vk.FreeMemory(_orig, data->memory, nullptr);
+		}
 		else
+		{
 			vmaDestroyImage(_alloc, (VkImage)handle.handle, allocation);
+		}
 	}
 	else
 	{
@@ -423,15 +573,22 @@ void reshade::vulkan::device_impl::destroy_resource(api::resource handle)
 		unregister_object<VK_OBJECT_TYPE_BUFFER>((VkBuffer)handle.handle);
 
 		if (allocation == VMA_NULL)
+		{
 			vk.DestroyBuffer(_orig, (VkBuffer)handle.handle, nullptr);
+
+			if (data->memory != VK_NULL_HANDLE)
+				vk.FreeMemory(_orig, data->memory, nullptr);
+		}
 		else
+		{
 			vmaDestroyBuffer(_alloc, (VkBuffer)handle.handle, allocation);
+		}
 	}
 }
 
 reshade::api::resource_desc reshade::vulkan::device_impl::get_resource_desc(api::resource resource) const
 {
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
 	if (data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
 		return convert_resource_desc(data->create_info);
 	else
@@ -442,7 +599,7 @@ void reshade::vulkan::device_impl::set_resource_name(api::resource handle, const
 	if (vk.SetDebugUtilsObjectNameEXT == nullptr)
 		return;
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)handle.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)handle.handle);
 
 	VkDebugUtilsObjectNameInfoEXT name_info { VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
 	name_info.objectType = data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO ? VK_OBJECT_TYPE_IMAGE : VK_OBJECT_TYPE_BUFFER;
@@ -454,13 +611,12 @@ void reshade::vulkan::device_impl::set_resource_name(api::resource handle, const
 
 bool reshade::vulkan::device_impl::create_resource_view(api::resource resource, api::resource_usage usage_type, const api::resource_view_desc &desc, api::resource_view *out_handle)
 {
-	if (resource.handle == 0)
-	{
-		*out_handle = { 0 };
-		return false;
-	}
+	*out_handle = { 0 };
 
-	const auto resource_data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
+	if (resource.handle == 0)
+		return false;
+
+	const auto resource_data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
 	if (resource_data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
 	{
 		VkImageViewCreateInfo create_info { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
@@ -520,7 +676,6 @@ bool reshade::vulkan::device_impl::create_resource_view(api::resource resource, 
 		}
 	}
 
-	*out_handle = { 0 };
 	return false;
 }
 void reshade::vulkan::device_impl::destroy_resource_view(api::resource_view handle)
@@ -531,7 +686,7 @@ void reshade::vulkan::device_impl::destroy_resource_view(api::resource_view hand
 	static_assert(
 		offsetof(object_data<VK_OBJECT_TYPE_IMAGE_VIEW>, create_info) == offsetof(object_data<VK_OBJECT_TYPE_BUFFER_VIEW>, create_info));
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)handle.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)handle.handle);
 	if (data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO) // Structure type is at the same offset in both image view and buffer view object data structures
 	{
 		unregister_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)handle.handle);
@@ -548,7 +703,7 @@ void reshade::vulkan::device_impl::destroy_resource_view(api::resource_view hand
 
 reshade::api::resource reshade::vulkan::device_impl::get_resource_from_view(api::resource_view view) const
 {
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)view.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)view.handle);
 	if (data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
 		return { (uint64_t)data->create_info.image };
 	else
@@ -556,7 +711,7 @@ reshade::api::resource reshade::vulkan::device_impl::get_resource_from_view(api:
 }
 reshade::api::resource_view_desc reshade::vulkan::device_impl::get_resource_view_desc(api::resource_view view) const
 {
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)view.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)view.handle);
 	if (data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
 		return convert_resource_view_desc(data->create_info);
 	else
@@ -567,7 +722,7 @@ void reshade::vulkan::device_impl::set_resource_view_name(api::resource_view han
 	if (vk.SetDebugUtilsObjectNameEXT == nullptr)
 		return;
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)handle.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)handle.handle);
 
 	VkDebugUtilsObjectNameInfoEXT name_info { VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
 	name_info.objectType = data->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO ? VK_OBJECT_TYPE_IMAGE_VIEW : VK_OBJECT_TYPE_BUFFER_VIEW;
@@ -616,6 +771,8 @@ bool reshade::vulkan::device_impl::create_pipeline(const api::pipeline_desc &des
 }
 bool reshade::vulkan::device_impl::create_compute_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	*out_handle = { 0 };
+
 	VkComputePipelineCreateInfo create_info { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
 	create_info.layout = (VkPipelineLayout)desc.layout.handle;
 
@@ -640,16 +797,11 @@ bool reshade::vulkan::device_impl::create_compute_pipeline(const api::pipeline_d
 exit_failure:
 	vk.DestroyShaderModule(_orig, create_info.stage.module, nullptr);
 
-	*out_handle = { 0 };
 	return false;
 }
 bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states, api::pipeline *out_handle)
 {
-	if (desc.graphics.render_pass_template.handle == 0)
-	{
-		*out_handle = { 0 };
-		return false;
-	}
+	*out_handle = { 0 };
 
 	VkGraphicsPipelineCreateInfo create_info { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
 	create_info.layout = (VkPipelineLayout)desc.layout.handle;
@@ -825,20 +977,18 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 		rasterization_state_info.depthBiasSlopeFactor = desc.graphics.rasterizer_state.slope_scaled_depth_bias;
 		rasterization_state_info.lineWidth = 1.0f;
 
+#ifdef VK_EXT_conservative_rasterization
 		VkPipelineRasterizationConservativeStateCreateInfoEXT conservative_rasterization_info { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT };
-
 		if (desc.graphics.rasterizer_state.conservative_rasterization != 0)
 		{
 			rasterization_state_info.pNext = &conservative_rasterization_info;
 			conservative_rasterization_info.conservativeRasterizationMode = static_cast<VkConservativeRasterizationModeEXT>(desc.graphics.rasterizer_state.conservative_rasterization);
 		}
-
-		create_info.renderPass = (VkRenderPass)desc.graphics.render_pass_template.handle;
-		const auto render_pass_data = get_user_data_for_object<VK_OBJECT_TYPE_RENDER_PASS>(create_info.renderPass);
+#endif
 
 		VkPipelineMultisampleStateCreateInfo multisample_state_info { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
 		create_info.pMultisampleState = &multisample_state_info;
-		multisample_state_info.rasterizationSamples = render_pass_data->samples;
+		multisample_state_info.rasterizationSamples = desc.graphics.sample_count != 0 ? static_cast<VkSampleCountFlagBits>(desc.graphics.sample_count) : VK_SAMPLE_COUNT_1_BIT;
 		multisample_state_info.sampleShadingEnable = VK_FALSE;
 		multisample_state_info.minSampleShading = 0.0f;
 		multisample_state_info.alphaToCoverageEnable = desc.graphics.blend_state.alpha_to_coverage_enable;
@@ -882,22 +1032,94 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 			attachment_info[i].colorWriteMask = desc.graphics.blend_state.render_target_write_mask[i];
 		}
 
-		uint32_t num_color_attachments = 0;
-		for (const auto &attachment : render_pass_data->attachments)
-			if (attachment.format_flags == VK_IMAGE_ASPECT_COLOR_BIT)
-				num_color_attachments++;
-
 		VkPipelineColorBlendStateCreateInfo color_blend_state_info { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
 		create_info.pColorBlendState = &color_blend_state_info;
 		color_blend_state_info.logicOpEnable = desc.graphics.blend_state.logic_op_enable[0];
 		color_blend_state_info.logicOp = convert_logic_op(desc.graphics.blend_state.logic_op[0]);
-		color_blend_state_info.attachmentCount = num_color_attachments;
 		color_blend_state_info.pAttachments = attachment_info;
 		std::copy_n(desc.graphics.blend_state.blend_constant, 4, color_blend_state_info.blendConstants);
+
+		VkFormat attachment_formats[8];
+		while (color_blend_state_info.attachmentCount < 8 && desc.graphics.render_target_formats[color_blend_state_info.attachmentCount] != api::format::unknown)
+		{
+			attachment_formats[color_blend_state_info.attachmentCount] = convert_format(desc.graphics.render_target_formats[color_blend_state_info.attachmentCount]);
+			color_blend_state_info.attachmentCount++;
+		}
+
+#ifdef VK_KHR_dynamic_rendering
+		VkPipelineRenderingCreateInfoKHR dynamic_rendering_info { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR };
+		if (vk.CmdBeginRenderingKHR != nullptr)
+		{
+			dynamic_rendering_info.colorAttachmentCount = color_blend_state_info.attachmentCount;
+			dynamic_rendering_info.pColorAttachmentFormats = attachment_formats;
+			dynamic_rendering_info.depthAttachmentFormat = convert_format(desc.graphics.depth_stencil_format);
+			dynamic_rendering_info.stencilAttachmentFormat = convert_format(desc.graphics.depth_stencil_format);
+
+			create_info.pNext = &dynamic_rendering_info;
+		}
+		else
+#endif
+		{
+			VkAttachmentReference attach_refs[9];
+			VkAttachmentDescription attach_descs[9];
+
+			VkSubpassDescription subpass = {};
+			subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+			subpass.colorAttachmentCount = color_blend_state_info.attachmentCount;
+			subpass.pColorAttachments = attach_refs;
+			subpass.pDepthStencilAttachment = desc.graphics.depth_stencil_format != api::format::unknown ? &attach_refs[color_blend_state_info.attachmentCount] : nullptr;
+
+			VkRenderPassCreateInfo render_pass_create_info { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+			render_pass_create_info.attachmentCount = subpass.colorAttachmentCount + (subpass.pDepthStencilAttachment != nullptr ? 1 : 0);
+			render_pass_create_info.pAttachments = attach_descs;
+			render_pass_create_info.subpassCount = 1;
+			render_pass_create_info.pSubpasses = &subpass;
+
+			for (uint32_t i = 0; i < subpass.colorAttachmentCount; ++i)
+			{
+				VkAttachmentReference &attach_ref = attach_refs[i];
+				attach_ref.attachment = i;
+				attach_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+				VkAttachmentDescription &attach_desc = attach_descs[i];
+				attach_desc.flags = 0;
+				attach_desc.format = attachment_formats[i];
+				attach_desc.samples = multisample_state_info.rasterizationSamples;
+				attach_desc.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+				attach_desc.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+				attach_desc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+				attach_desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+				attach_desc.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+				attach_desc.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			}
+			if (subpass.pDepthStencilAttachment != nullptr)
+			{
+				VkAttachmentReference &attach_ref = attach_refs[subpass.colorAttachmentCount];
+				attach_ref.attachment = subpass.colorAttachmentCount;
+				attach_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+				VkAttachmentDescription &attach_desc = attach_descs[subpass.colorAttachmentCount];
+				attach_desc.flags = 0;
+				attach_desc.format = convert_format(desc.graphics.depth_stencil_format);
+				attach_desc.samples = multisample_state_info.rasterizationSamples;
+				attach_desc.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+				attach_desc.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+				attach_desc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+				attach_desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+				attach_desc.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+				attach_desc.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+			}
+
+			if (vk.CreateRenderPass(_orig, &render_pass_create_info, nullptr, &create_info.renderPass) != VK_SUCCESS)
+				goto exit_failure;
+		}
 
 		if (VkPipeline object = VK_NULL_HANDLE;
 			vk.CreateGraphicsPipelines(_orig, VK_NULL_HANDLE, 1, &create_info, nullptr, &object) == VK_SUCCESS)
 		{
+			if (create_info.renderPass != VK_NULL_HANDLE)
+				vk.DestroyRenderPass(_orig, create_info.renderPass, nullptr);
+
 			for (uint32_t stage_index = 0; stage_index < create_info.stageCount; ++stage_index)
 				vk.DestroyShaderModule(_orig, create_info.pStages[stage_index].module, nullptr);
 
@@ -907,10 +1129,12 @@ bool reshade::vulkan::device_impl::create_graphics_pipeline(const api::pipeline_
 	}
 
 exit_failure:
+	if (create_info.renderPass != VK_NULL_HANDLE)
+		vk.DestroyRenderPass(_orig, create_info.renderPass, nullptr);
+
 	for (uint32_t stage_index = 0; stage_index < create_info.stageCount; ++stage_index)
 		vk.DestroyShaderModule(_orig, create_info.pStages[stage_index].module, nullptr);
 
-	*out_handle = { 0 };
 	return false;
 }
 void reshade::vulkan::device_impl::destroy_pipeline(api::pipeline handle)
@@ -918,197 +1142,10 @@ void reshade::vulkan::device_impl::destroy_pipeline(api::pipeline handle)
 	vk.DestroyPipeline(_orig, (VkPipeline)handle.handle, nullptr);
 }
 
-bool reshade::vulkan::device_impl::create_render_pass(uint32_t attachment_count, const api::attachment_desc *attachments, api::render_pass *out_handle)
-{
-	object_data<VK_OBJECT_TYPE_RENDER_PASS> data;
-	data.samples = VK_SAMPLE_COUNT_1_BIT;
-	data.attachments.reserve(8 + 1);
-
-	VkAttachmentReference depth_stencil_attachment = { VK_ATTACHMENT_UNUSED };
-	std::vector<VkAttachmentReference> color_attachments;
-	color_attachments.reserve(8);
-	std::vector<VkAttachmentDescription> attachment_descs;
-	attachment_descs.reserve(8 + 1);
-
-	for (uint32_t a = 0; a < attachment_count; ++a)
-	{
-		VkAttachmentDescription &attach = attachment_descs.emplace_back();
-		attach.format = convert_format(attachments[a].format);
-		attach.samples = static_cast<VkSampleCountFlagBits>(attachments[a].samples);
-		attach.loadOp = convert_attachment_load_op(attachments[a].color_or_depth_load_op);
-		attach.storeOp = convert_attachment_store_op(attachments[a].color_or_depth_store_op);
-		attach.stencilLoadOp = convert_attachment_load_op(attachments[a].stencil_load_op);
-		attach.stencilStoreOp = convert_attachment_store_op(attachments[a].stencil_store_op);
-
-		data.attachments.push_back({ attach.initialLayout, 0, convert_attachment_type(attachments[a].type) });
-
-		if (attachments[a].type == api::attachment_type::color)
-		{
-			if (attachments[a].index >= color_attachments.size())
-				color_attachments.resize(attachments[a].index + 1);
-
-			VkAttachmentReference &ref = color_attachments[attachments[a].index];
-			ref.attachment = a;
-			ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-			attach.initialLayout = ref.layout;
-			attach.finalLayout = ref.layout;
-		}
-		else
-		{
-			if (attachments[a].index > 0)
-			{
-				*out_handle = { 0 };
-				return false;
-			}
-
-			VkAttachmentReference &ref = depth_stencil_attachment;
-			ref.attachment = a;
-			ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-			attach.initialLayout = ref.layout;
-			attach.finalLayout = ref.layout;
-		}
-
-		data.samples = attach.samples;
-	}
-
-	// Synchronize any writes to render targets in previous passes with reads from them in this pass
-	VkSubpassDependency subdep = {};
-	subdep.srcSubpass = VK_SUBPASS_EXTERNAL;
-	subdep.dstSubpass = 0;
-	subdep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	subdep.dstStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
-	subdep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-	subdep.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-	VkSubpassDescription subpass = {};
-	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = static_cast<uint32_t>(color_attachments.size());
-	subpass.pColorAttachments = color_attachments.data();
-	subpass.pDepthStencilAttachment = &depth_stencil_attachment;
-
-	VkRenderPassCreateInfo create_info { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-	create_info.attachmentCount = static_cast<uint32_t>(attachment_descs.size());
-	create_info.pAttachments = attachment_descs.data();
-	create_info.subpassCount = 1;
-	create_info.pSubpasses = &subpass;
-	create_info.dependencyCount = 1;
-	create_info.pDependencies = &subdep;
-
-	if (VkRenderPass object = VK_NULL_HANDLE;
-		vk.CreateRenderPass(_orig, &create_info, nullptr, &object) == VK_SUCCESS)
-	{
-		register_object<VK_OBJECT_TYPE_RENDER_PASS>(object, std::move(data));
-
-		*out_handle = { (uint64_t)object };
-		return true;
-	}
-	else
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-}
-void reshade::vulkan::device_impl::destroy_render_pass(api::render_pass handle)
-{
-	unregister_object<VK_OBJECT_TYPE_RENDER_PASS>((VkRenderPass)handle.handle);
-
-	vk.DestroyRenderPass(_orig, (VkRenderPass)handle.handle, nullptr);
-}
-
-bool reshade::vulkan::device_impl::create_framebuffer(api::render_pass render_pass_template, uint32_t attachment_count, const api::resource_view *attachments, api::framebuffer *out_handle)
-{
-	if (render_pass_template.handle == 0)
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-
-	const auto &pass_attachments = get_user_data_for_object<VK_OBJECT_TYPE_RENDER_PASS>((VkRenderPass)render_pass_template.handle)->attachments;
-	if (pass_attachments.empty() || attachment_count > pass_attachments.size())
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-
-	object_data<VK_OBJECT_TYPE_FRAMEBUFFER> data;
-	data.attachments.resize(attachment_count);
-	data.attachment_types.resize(attachment_count);
-
-	data.area.width = std::numeric_limits<uint32_t>::max();
-	data.area.height = std::numeric_limits<uint32_t>::max();
-	uint32_t layers = std::numeric_limits<uint32_t>::max();
-
-	for (uint32_t a = 0; a < attachment_count; ++a)
-	{
-		data.attachments[a] = (VkImageView)attachments[a].handle;
-		data.attachment_types[a] = pass_attachments[a].format_flags;
-
-		const auto view_data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)attachments[a].handle);
-		const auto image_data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>(view_data->create_info.image);
-
-		data.area.width = std::min(data.area.width, image_data->create_info.extent.width);
-		data.area.height = std::min(data.area.height, image_data->create_info.extent.height);
-		layers = std::min(layers, view_data->create_info.subresourceRange.layerCount);
-	}
-
-	VkFramebufferCreateInfo create_info { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-	create_info.renderPass = (VkRenderPass)render_pass_template.handle;
-	create_info.attachmentCount = attachment_count;
-	create_info.pAttachments = data.attachments.data();
-	create_info.width = data.area.width;
-	create_info.height = data.area.height;
-	create_info.layers = layers;
-
-	if (VkFramebuffer object = VK_NULL_HANDLE;
-		vk.CreateFramebuffer(_orig, &create_info, nullptr, &object) == VK_SUCCESS)
-	{
-		register_object<VK_OBJECT_TYPE_FRAMEBUFFER>(object, std::move(data));
-
-		*out_handle = { (uint64_t)object };
-		return true;
-	}
-	else
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-}
-void reshade::vulkan::device_impl::destroy_framebuffer(api::framebuffer handle)
-{
-	unregister_object<VK_OBJECT_TYPE_FRAMEBUFFER>((VkFramebuffer)handle.handle);
-
-	vk.DestroyFramebuffer(_orig, (VkFramebuffer)handle.handle, nullptr);
-}
-
-reshade::api::resource_view reshade::vulkan::device_impl::get_framebuffer_attachment(api::framebuffer fbo, api::attachment_type type, uint32_t index) const
-{
-	assert(fbo.handle != 0);
-
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_FRAMEBUFFER>((VkFramebuffer)fbo.handle);
-	assert(index <= data->attachments.size());
-
-	for (uint32_t i = 0; i < data->attachments.size(); ++i)
-	{
-		if (data->attachment_types[i] & static_cast<VkImageAspectFlags>(type))
-		{
-			if (index == 0)
-			{
-				return { (uint64_t)data->attachments[i] };
-			}
-			else
-			{
-				index -= 1;
-			}
-		}
-	}
-
-	return { 0 };
-}
-
 bool reshade::vulkan::device_impl::create_pipeline_layout(uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout *out_handle)
 {
+	*out_handle = { 0 };
+
 	std::vector<VkPushConstantRange> push_constant_ranges;
 	std::vector<VkDescriptorSetLayout> set_layouts;
 	set_layouts.reserve(param_count);
@@ -1119,7 +1156,62 @@ bool reshade::vulkan::device_impl::create_pipeline_layout(uint32_t param_count, 
 	// Push constant ranges have to be at the end of the layout description
 	for (; i < param_count && params[i].type != api::pipeline_layout_param_type::push_constants; ++i)
 	{
-		set_layouts.push_back((VkDescriptorSetLayout)params[i].descriptor_layout.handle);
+		const bool push_descriptors = params[i].type == api::pipeline_layout_param_type::push_descriptors;
+		const uint32_t range_count = push_descriptors ? 1 : params[i].descriptor_set.count;
+		const api::descriptor_range *const input_ranges = push_descriptors ? &params[i].push_descriptors : params[i].descriptor_set.ranges;
+
+		object_data<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT> data;
+		data.ranges.assign(input_ranges, input_ranges + range_count);
+		data.binding_to_offset.reserve(range_count);
+
+		std::vector<VkDescriptorSetLayoutBinding> internal_bindings;
+		internal_bindings.reserve(range_count);
+
+		for (uint32_t k = 0; k < range_count; ++k)
+		{
+			const api::descriptor_range &range = input_ranges[k];
+
+			if (range.count == 0)
+				continue;
+
+			data.binding_to_offset[range.binding] = range.offset;
+
+			VkDescriptorSetLayoutBinding &internal_binding = internal_bindings.emplace_back();
+			internal_binding.binding = range.binding;
+			internal_binding.descriptorType = static_cast<VkDescriptorType>(range.type);
+			internal_binding.descriptorCount = range.array_size;
+			internal_binding.stageFlags = static_cast<VkShaderStageFlags>(range.visibility);
+
+			// Add additional bindings if the total descriptor count exceeds the array size of the binding
+			for (uint32_t j = 0; j < (range.count - range.array_size); ++j)
+			{
+				data.binding_to_offset[range.binding + 1 + j] = range.offset + range.array_size + j;
+
+				VkDescriptorSetLayoutBinding &additional_binding = internal_bindings.emplace_back();
+				additional_binding.binding = range.binding + 1 + j;
+				additional_binding.descriptorType = static_cast<VkDescriptorType>(range.type);
+				additional_binding.descriptorCount = 1;
+				additional_binding.stageFlags = static_cast<VkShaderStageFlags>(range.visibility);
+			}
+		}
+
+		VkDescriptorSetLayoutCreateInfo create_info { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+		create_info.bindingCount = static_cast<uint32_t>(internal_bindings.size());
+		create_info.pBindings = internal_bindings.data();
+
+		if (push_descriptors && vk.CmdPushDescriptorSetKHR != nullptr)
+			create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+
+		if (vk.CreateDescriptorSetLayout(_orig, &create_info, nullptr, &set_layouts.emplace_back()) == VK_SUCCESS)
+		{
+			register_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>(set_layouts.back(), std::move(data));
+		}
+		else
+		{
+			for (VkDescriptorSetLayout set_layout : set_layouts)
+				vk.DestroyDescriptorSetLayout(_orig, set_layout, nullptr);
+			return false;
+		}
 	}
 
 	for (; i < param_count && params[i].type == api::pipeline_layout_param_type::push_constants; ++i)
@@ -1131,10 +1223,7 @@ bool reshade::vulkan::device_impl::create_pipeline_layout(uint32_t param_count, 
 	}
 
 	if (i < param_count)
-	{
-		*out_handle = { 0 };
 		return false;
-	}
 
 	VkPipelineLayoutCreateInfo create_info { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 	create_info.setLayoutCount = static_cast<uint32_t>(set_layouts.size());
@@ -1147,7 +1236,11 @@ bool reshade::vulkan::device_impl::create_pipeline_layout(uint32_t param_count, 
 	{
 		object_data<VK_OBJECT_TYPE_PIPELINE_LAYOUT> data;
 		data.params.assign(params, params + param_count);
-		data.num_sets = create_info.setLayoutCount;
+		data.set_layouts = std::move(set_layouts);
+
+		for (uint32_t k = 0; k < data.set_layouts.size(); ++k)
+			if (params[k].type == api::pipeline_layout_param_type::descriptor_set)
+				data.params[k].descriptor_set.ranges = get_private_data_for_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>(data.set_layouts[k])->ranges.data();
 
 		register_object<VK_OBJECT_TYPE_PIPELINE_LAYOUT>(object, std::move(data));
 
@@ -1156,104 +1249,33 @@ bool reshade::vulkan::device_impl::create_pipeline_layout(uint32_t param_count, 
 	}
 	else
 	{
-		*out_handle = { 0 };
 		return false;
 	}
 }
 void reshade::vulkan::device_impl::destroy_pipeline_layout(api::pipeline_layout handle)
 {
+	if (handle.handle == 0)
+		return;
+
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_PIPELINE_LAYOUT>((VkPipelineLayout)handle.handle);
+
+	for (VkDescriptorSetLayout set_layout : data->set_layouts)
+	{
+		unregister_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>(set_layout);
+
+		vk.DestroyDescriptorSetLayout(_orig, set_layout, nullptr);
+	}
+
 	unregister_object<VK_OBJECT_TYPE_PIPELINE_LAYOUT>((VkPipelineLayout)handle.handle);
 
 	vk.DestroyPipelineLayout(_orig, (VkPipelineLayout)handle.handle, nullptr);
 }
 
-reshade::api::pipeline_layout_param reshade::vulkan::device_impl::get_pipeline_layout_param(api::pipeline_layout layout, uint32_t index) const
+reshade::api::pipeline_layout_param reshade::vulkan::device_impl::get_pipeline_layout_param(api::pipeline_layout layout, uint32_t layout_param) const
 {
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_PIPELINE_LAYOUT>((VkPipelineLayout)layout.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_PIPELINE_LAYOUT>((VkPipelineLayout)layout.handle);
 
-	return index < data->params.size() ? data->params[index] : api::pipeline_layout_param {};
-}
-
-bool reshade::vulkan::device_impl::create_descriptor_set_layout(uint32_t range_count, const api::descriptor_range *ranges, bool push_descriptors, api::descriptor_set_layout *out_handle)
-{
-	object_data<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT> data;
-	data.ranges.assign(ranges, ranges + range_count);
-	data.binding_to_offset.reserve(range_count);
-
-	std::vector<VkDescriptorSetLayoutBinding> internal_bindings;
-	internal_bindings.reserve(range_count);
-
-	for (uint32_t i = 0; i < range_count; ++i)
-	{
-		const api::descriptor_range &range = ranges[i];
-
-		if (range.count == 0)
-			continue;
-
-		data.binding_to_offset[range.binding] = range.offset;
-
-		VkDescriptorSetLayoutBinding &internal_binding = internal_bindings.emplace_back();
-		internal_binding.binding = range.binding;
-		internal_binding.descriptorType = static_cast<VkDescriptorType>(range.type);
-		internal_binding.descriptorCount = range.array_size;
-		internal_binding.stageFlags = static_cast<VkShaderStageFlags>(range.visibility);
-
-		// Add additional bindings if the total descriptor count exceeds the array size of the binding
-		for (uint32_t k = 0; k < (range.count - range.array_size); ++k)
-		{
-			data.binding_to_offset[range.binding + 1 + k] = range.offset + range.array_size + k;
-
-			VkDescriptorSetLayoutBinding &additional_binding = internal_bindings.emplace_back();
-			additional_binding.binding = range.binding + 1 + k;
-			additional_binding.descriptorType = static_cast<VkDescriptorType>(range.type);
-			additional_binding.descriptorCount = 1;
-			additional_binding.stageFlags = static_cast<VkShaderStageFlags>(range.visibility);
-		}
-	}
-
-	VkDescriptorSetLayoutCreateInfo create_info { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-	create_info.bindingCount = static_cast<uint32_t>(internal_bindings.size());
-	create_info.pBindings = internal_bindings.data();
-
-	if (push_descriptors && vk.CmdPushDescriptorSetKHR != nullptr)
-		create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-
-	if (VkDescriptorSetLayout object = VK_NULL_HANDLE;
-		vk.CreateDescriptorSetLayout(_orig, &create_info, nullptr, &object) == VK_SUCCESS)
-	{
-		register_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>(object, std::move(data));
-
-		*out_handle = { (uint64_t)object };
-		return true;
-	}
-	else
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-}
-void reshade::vulkan::device_impl::destroy_descriptor_set_layout(api::descriptor_set_layout handle)
-{
-	unregister_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>((VkDescriptorSetLayout)handle.handle);
-
-	vk.DestroyDescriptorSetLayout(_orig, (VkDescriptorSetLayout)handle.handle, nullptr);
-}
-
-void reshade::vulkan::device_impl::get_descriptor_set_layout_ranges(api::descriptor_set_layout layout, uint32_t *count, api::descriptor_range *ranges) const
-{
-	assert(count != nullptr);
-
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT>((VkDescriptorSetLayout)layout.handle);
-
-	if (ranges != nullptr)
-	{
-		*count = std::min(*count, static_cast<uint32_t>(data->ranges.size()));
-		std::memcpy(ranges, data->ranges.data(), *count * sizeof(api::descriptor_range));
-	}
-	else
-	{
-		*count = static_cast<uint32_t>(data->ranges.size());
-	}
+	return layout_param < data->params.size() ? data->params[layout_param] : api::pipeline_layout_param {};
 }
 
 bool reshade::vulkan::device_impl::create_query_pool(api::query_type type, uint32_t count, api::query_pool *out_handle)
@@ -1313,14 +1335,18 @@ void reshade::vulkan::device_impl::destroy_query_pool(api::query_pool handle)
 	vk.DestroyQueryPool(_orig, (VkQueryPool)handle.handle, nullptr);
 }
 
-bool reshade::vulkan::device_impl::create_descriptor_sets(uint32_t count, const api::descriptor_set_layout *layouts, api::descriptor_set *out_sets)
+bool reshade::vulkan::device_impl::create_descriptor_sets(uint32_t count, api::pipeline_layout layout, uint32_t layout_param, api::descriptor_set *out_sets)
 {
-	static_assert(sizeof(*layouts) == sizeof(VkDescriptorSetLayout) && sizeof(*out_sets) == sizeof(VkDescriptorSet));
+	static_assert(sizeof(*out_sets) == sizeof(VkDescriptorSet));
+
+	const auto layout_data = get_private_data_for_object<VK_OBJECT_TYPE_PIPELINE_LAYOUT>((VkPipelineLayout)layout.handle);
+
+	std::vector<VkDescriptorSetLayout> set_layouts(count, layout_data->set_layouts[layout_param]);
 
 	VkDescriptorSetAllocateInfo alloc_info { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
 	alloc_info.descriptorPool = _descriptor_pool;
 	alloc_info.descriptorSetCount = count;
-	alloc_info.pSetLayouts = reinterpret_cast<const VkDescriptorSetLayout *>(layouts);
+	alloc_info.pSetLayouts = set_layouts.data();
 
 	if (vk.AllocateDescriptorSets(_orig, &alloc_info, reinterpret_cast<VkDescriptorSet *>(out_sets)) == VK_SUCCESS)
 	{
@@ -1329,7 +1355,7 @@ bool reshade::vulkan::device_impl::create_descriptor_sets(uint32_t count, const 
 			object_data<VK_OBJECT_TYPE_DESCRIPTOR_SET> data;
 			data.pool = VK_NULL_HANDLE; // "get_descriptor_pool_offset" is not supported for the internal pool
 			data.offset = 0;
-			data.layout = (VkDescriptorSetLayout)layouts[i].handle;
+			data.layout = layout_data->set_layouts[layout_param];
 
 			register_object<VK_OBJECT_TYPE_DESCRIPTOR_SET>((VkDescriptorSet)out_sets[i].handle, std::move(data));
 		}
@@ -1351,7 +1377,7 @@ void reshade::vulkan::device_impl::destroy_descriptor_sets(uint32_t count, const
 
 void reshade::vulkan::device_impl::get_descriptor_pool_offset(api::descriptor_set set, api::descriptor_pool *pool, uint32_t *offset) const
 {
-	const auto set_data = get_user_data_for_object<VK_OBJECT_TYPE_DESCRIPTOR_SET>((VkDescriptorSet)set.handle);
+	const auto set_data = get_private_data_for_object<VK_OBJECT_TYPE_DESCRIPTOR_SET>((VkDescriptorSet)set.handle);
 
 	*pool = { (uint64_t)set_data->pool };
 	*offset = static_cast<uint32_t>(set_data->offset);
@@ -1364,7 +1390,7 @@ bool reshade::vulkan::device_impl::map_buffer_region(api::resource resource, uin
 
 	assert(resource.handle != 0);
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_BUFFER>((VkBuffer)resource.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_BUFFER>((VkBuffer)resource.handle);
 	if (data->allocation != VMA_NULL)
 	{
 		assert(size == UINT64_MAX || size <= data->allocation->GetSize());
@@ -1386,7 +1412,7 @@ void reshade::vulkan::device_impl::unmap_buffer_region(api::resource resource)
 {
 	assert(resource.handle != 0);
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_BUFFER>((VkBuffer)resource.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_BUFFER>((VkBuffer)resource.handle);
 	if (data->allocation != VMA_NULL)
 	{
 		vmaUnmapMemory(_alloc, data->allocation);
@@ -1396,7 +1422,7 @@ void reshade::vulkan::device_impl::unmap_buffer_region(api::resource resource)
 		vk.UnmapMemory(_orig, data->memory);
 	}
 }
-bool reshade::vulkan::device_impl::map_texture_region(api::resource resource, uint32_t subresource, const int32_t box[6], api::map_access, api::subresource_data *out_data)
+bool reshade::vulkan::device_impl::map_texture_region(api::resource resource, uint32_t subresource, const api::subresource_box *box, api::map_access, api::subresource_data *out_data)
 {
 	if (out_data == nullptr)
 		return false;
@@ -1412,7 +1438,7 @@ bool reshade::vulkan::device_impl::map_texture_region(api::resource resource, ui
 
 	assert(resource.handle != 0);
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
 	if (data->allocation != VMA_NULL)
 	{
 		if (vmaMapMemory(_alloc, data->allocation, &out_data->data) == VK_SUCCESS)
@@ -1442,7 +1468,7 @@ void reshade::vulkan::device_impl::unmap_texture_region(api::resource resource, 
 
 	assert(resource.handle != 0);
 
-	const auto data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
+	const auto data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
 	if (data->allocation != VMA_NULL)
 	{
 		vmaUnmapMemory(_alloc, data->allocation);
@@ -1473,18 +1499,18 @@ void reshade::vulkan::device_impl::update_buffer_region(const void *data, api::r
 		}
 	}
 }
-void reshade::vulkan::device_impl::update_texture_region(const api::subresource_data &data, api::resource resource, uint32_t subresource, const int32_t box[6])
+void reshade::vulkan::device_impl::update_texture_region(const api::subresource_data &data, api::resource resource, uint32_t subresource, const api::subresource_box *box)
 {
-	const auto resource_data = get_user_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
+	const auto resource_data = get_private_data_for_object<VK_OBJECT_TYPE_IMAGE>((VkImage)resource.handle);
 
 	VkExtent3D extent = resource_data->create_info.extent;
 	extent.depth *= resource_data->create_info.arrayLayers;
 
 	if (box != nullptr)
 	{
-		extent.width  = box[3] - box[0];
-		extent.height = box[4] - box[1];
-		extent.depth  = box[5] - box[2];
+		extent.width  = box->right - box->left;
+		extent.height = box->bottom - box->top;
+		extent.depth  = box->back - box->front;
 	}
 
 	const auto row_pitch = api::format_row_pitch(convert_format(resource_data->create_info.format), extent.width);
@@ -1597,7 +1623,7 @@ void reshade::vulkan::device_impl::update_descriptor_sets(uint32_t count, const 
 		case api::descriptor_type::shader_resource_view:
 		case api::descriptor_type::unordered_access_view:
 			if (const auto descriptors = static_cast<const api::resource_view *>(update.descriptors);
-				get_user_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)descriptors[0].handle)->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
+				get_private_data_for_object<VK_OBJECT_TYPE_IMAGE_VIEW>((VkImageView)descriptors[0].handle)->create_info.sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
 			{
 				write.pImageInfo = image_info + j;
 				for (uint32_t k = 0; k < update.count; ++k, ++j)

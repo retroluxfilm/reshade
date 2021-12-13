@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cfloat>
 #include <cstdint>
 
 namespace reshade { namespace api
@@ -320,6 +321,7 @@ namespace reshade { namespace api
 		case format::b10g10r10a2_typeless:
 			return format::b10g10r10a2_unorm;
 		case format::d16_unorm:
+		case format::r16_typeless:
 			return format::r16_unorm;
 		case format::r16g16_typeless:
 			return format::r16g16_unorm;

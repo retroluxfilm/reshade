@@ -271,8 +271,10 @@ namespace reshade
 		/// <item><description>glRenderbufferStorageMultisample</description></item>
 		/// <item><description>glNamedRenderbufferStorage</description></item>
 		/// <item><description>glNamedRenderbufferStorageMultisample</description></item>
-		/// <item><description>vkCreateBuffer</description></item>
-		/// <item><description>vkCreateImage</description></item>
+		/// <item><description>vkBindBufferMemory</description></item>
+		/// <item><description>vkBindBufferMemory2</description></item>
+		/// <item><description>vkBindImageMemory</description></item>
+		/// <item><description>vkBindImageMemory2</description></item>
 		/// </list>
 		/// <para>Callback function signature: <c>void (api::device *device, const api::resource_desc &amp;desc, const api::subresource_data *initial_data, api::resource_usage initial_state, api::resource resource)</c></para>
 		/// </summary>
@@ -548,7 +550,7 @@ namespace reshade
 		/// <item><description>glDeleteProgram</description></item>
 		/// <item><description>vkDestroyPipeline</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::device *device, api::pipeline pipeline)</c></para>
+		/// <para>Callback function signature: <c>void (api::device *device, api::pipeline pipeline)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// Is not called in D3D9.
@@ -556,84 +558,30 @@ namespace reshade
 		destroy_pipeline,
 
 		/// <summary>
-		/// Called after successfull render pass creation from:
+		/// Called after successfull pipeline layout creation from:
 		/// <list type="bullet">
-		/// <item><description>vkCreateRenderPass</description></item>
+		/// <item><description>ID3D12Device::CreateRootSignature</description></item>
+		/// <item><description>vkCreatePipelineLayout</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>void (api::device *device, uint32_t attachment_count, const api::attachment_desc *attachments, api::render_pass pass)</c></para>
+		/// <para>Callback function signature: <c>void (api::device *device, uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout layout)</c></para>
 		/// </summary>
-		init_render_pass,
+		init_pipeline_layout,
 
 		/// <summary>
-		/// Called on render pass creation, before:
-		/// <list type="bullet">
-		/// <item><description>vkCreateRenderPass</description></item>
-		/// </list>
-		/// <para>Callback function signature: <c>bool (api::device *device, uint32_t attachment_count, api::attachment_desc *attachments)</c></para>
+		/// Called on pipeline layout creation.
+		/// <para>Callback function signature: <c>bool (api::device *device, uint32_t param_count, const api::pipeline_layout_param *params)</c></para>
 		/// </summary>
-		/// <remarks>
-		/// To overwrite the render pass description, modify <c>desc</c> in the callback and return <see langword="true"/>, otherwise return <see langword="false"/>.
-		/// </remarks>
-		create_render_pass,
+		create_pipeline_layout,
 
 		/// <summary>
-		/// Called on render pass destruction, before:
+		/// Called on pipeline layout destruction, before:
 		/// <list type="bullet">
-		/// <item><description>vkDestroyRenderPass</description></item>
+		/// <item><description>ID3D12RootSignature::Release</description></item>
+		/// <item><description>VkDestroyPipelineLayout</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>void (api::device *device, api::render_pass pass)</c></para>
+		/// <para>Callback function signature: <c>void (api::device *device, api::pipeline_layout layout)</c></para>
 		/// </summary>
-		destroy_render_pass,
-
-		/// <summary>
-		/// Called after successfull framebuffer object creation from:
-		/// <list type="bullet">
-		/// <item><description>glFramebufferTexture</description></item>
-		/// <item><description>glFramebufferTexture1D</description></item>
-		/// <item><description>glFramebufferTexture2D</description></item>
-		/// <item><description>glFramebufferTexture3D</description></item>
-		/// <item><description>glFramebufferTextureLayer</description></item>
-		/// <item><description>glFramebufferRenderbuffer</description></item>
-		/// <item><description>glNamedFramebufferTexture</description></item>
-		/// <item><description>glNamedFramebufferRenderbuffer</description></item>
-		/// <item><description>vkCreateFramebuffer</description></item>
-		/// </list>
-		/// <para>Callback function signature: <c>void (api::device *device, api::render_pass render_pass_template, uint32_t attachment_count, const api::resource_view *attachments, api::framebuffer fbo)</c></para>
-		/// </summary>
-		/// <remarks>
-		/// May be called multiple times with the same framebuffer handle (whenever the framebuffer object is updated).
-		/// </remarks>
-		init_framebuffer,
-
-		/// <summary>
-		/// Called on framebuffer object creation, before:
-		/// <list type="bullet">
-		/// <item><description>glFramebufferTexture</description></item>
-		/// <item><description>glFramebufferTexture1D</description></item>
-		/// <item><description>glFramebufferTexture2D</description></item>
-		/// <item><description>glFramebufferTexture3D</description></item>
-		/// <item><description>glFramebufferTextureLayer</description></item>
-		/// <item><description>glFramebufferRenderbuffer</description></item>
-		/// <item><description>glNamedFramebufferTexture</description></item>
-		/// <item><description>glNamedFramebufferRenderbuffer</description></item>
-		/// <item><description>vkCreateFramebuffer</description></item>
-		/// </list>
-		/// <para>Callback function signature: <c>bool (api::device *device, api::render_pass render_pass_template, uint32_t attachment_count, api::resource_view *attachments)</c></para>
-		/// </summary>
-		/// <remarks>
-		/// To overwrite the framebuffer description, modify <c>desc</c> in the callback and return <see langword="true"/>, otherwise return <see langword="false"/>.
-		/// </remarks>
-		create_framebuffer,
-
-		/// <summary>
-		/// Called on framebuffer object destruction, before:
-		/// <list type="bullet">
-		/// <item><description>glDeleteFramebuffers</description></item>
-		/// <item><description>vkDestroyFramebuffer</description></item>
-		/// </list>
-		/// <para>Callback function signature: <c>void (api::device *device, api::framebuffer fbo)</c></para>
-		/// </summary>
-		destroy_framebuffer,
+		destroy_pipeline_layout,
 
 		/// <summary>
 		/// Called after:
@@ -679,7 +627,7 @@ namespace reshade
 		/// <item><description>ID3D11DeviceContext::Map</description></item>
 		/// <item><description>ID3D12Resource::Map</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>void (api::device *device, api::resource resource, uint32_t subresource, const int32_t box[6], api::map_access access, api::subresource_data *data)</c></para>
+		/// <para>Callback function signature: <c>void (api::device *device, api::resource resource, uint32_t subresource, const api::box *box, api::map_access access, api::subresource_data *data)</c></para>
 		/// </summary>
 		map_texture_region,
 
@@ -733,7 +681,7 @@ namespace reshade
 		/// <item><description>glCompressedTextureSubData2D</description></item>
 		/// <item><description>glCompressedTextureSubData3D</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::device *device, const api::subresource_data &data, api::resource resource, uint32_t subresource, const int32_t box[6])</c></para>
+		/// <para>Callback function signature: <c>bool (api::device *device, const api::subresource_data &data, api::resource resource, uint32_t subresource, const api::box *box)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -767,21 +715,22 @@ namespace reshade
 		barrier,
 
 		/// <summary>
-		/// Called after:
+		/// Called before:
 		/// <list type="bullet">
 		/// <item><description>ID3D12GraphicsCommandList4::BeginRenderPass</description></item>
-		/// <item><description>glBindFramebuffer</description></item>
 		/// <item><description>vkCmdBeginRenderPass</description></item>
+		/// <item><description>vkCmdNextSubpass</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>void (api::command_list *cmd_list, api::render_pass pass, api::framebuffer fbo)</c></para>
+		/// <para>Callback function signature: <c>void (api::command_list *cmd_list, uint32_t count, const api::render_pass_render_target_desc *rts, const api::render_pass_depth_stencil_desc *ds)</c></para>
 		/// </summary>
 		begin_render_pass,
 
 		/// <summary>
-		/// Called after:
+		/// Called before:
 		/// <list type="bullet">
 		/// <item><description>ID3D12GraphicsCommandList4::EndRenderPass</description></item>
 		/// <item><description>vkCmdEndRenderPass</description></item>
+		/// <item><description>vkCmdNextSubpass</description></item>
 		/// </list>
 		/// <para>Callback function signature: <c>void (api::command_list *cmd_list)</c></para>
 		/// </summary>
@@ -796,6 +745,7 @@ namespace reshade
 		/// <item><description>ID3D11DeviceContext::OMSetRenderTargets</description></item>
 		/// <item><description>ID3D11DeviceContext::OMSetRenderTargetsAndUnorderedAccessViews</description></item>
 		/// <item><description>ID3D12GraphicsCommandList::OMSetRenderTargets</description></item>
+		/// <item><description>glBindFramebuffer</description></item>
 		/// </list>
 		/// <para>Callback function signature: <c>void (api::command_list *cmd_list, uint32_t count, const api::resource_view *rtvs, api::resource_view dsv)</c></para>
 		/// </summary>
@@ -871,11 +821,8 @@ namespace reshade
 		/// <item><description>glViewportIndexedfv</description></item>
 		/// <item><description>vkCmdSetViewport</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>void (api::command_list *cmd_list, uint32_t first, uint32_t count, const float *viewports)</c></para>
+		/// <para>Callback function signature: <c>void (api::command_list *cmd_list, uint32_t first, uint32_t count, const api::viewport *viewports)</c></para>
 		/// </summary>
-		/// <remarks>
-		/// Viewport data format is <c>{ viewport[0].x, viewport[0].y, viewport[0].width, viewport[0].height, viewport[0].min_depth, viewport[0].max_depth, viewport[1].x, viewport[1].y, ... }</c>.
-		/// </remarks>
 		bind_viewports,
 
 		/// <summary>
@@ -891,11 +838,8 @@ namespace reshade
 		/// <item><description>glScissorIndexedv</description></item>
 		/// <item><description>vkCmdSetScissor</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>void (api::command_list *cmd_list, uint32_t first, uint32_t count, const int32_t *rects)</c></para>
+		/// <para>Callback function signature: <c>void (api::command_list *cmd_list, uint32_t first, uint32_t count, const api::rect *rects)</c></para>
 		/// </summary>
-		/// <remarks>
-		/// Rectangle data format is <c>{ rect[0].left, rect[0].top, rect[0].right, rect[0].bottom, rect[1].left, rect[1].right, ... }</c>.
-		/// </remarks>
 		bind_scissor_rects,
 
 		/// <summary>
@@ -1134,7 +1078,7 @@ namespace reshade
 		/// <item><description>ID3D12GraphicsCommandList::CopyTextureRegion</description></item>
 		/// <item><description>vkCmdCopyBufferToImage</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint64_t source_offset, uint32_t row_length, uint32_t slice_height, api::resource dest, uint32_t dest_subresource, const int32_t dest_box[6])</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint64_t source_offset, uint32_t row_length, uint32_t slice_height, api::resource dest, uint32_t dest_subresource, const api::box *dest_box)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1163,7 +1107,7 @@ namespace reshade
 		/// <item><description>vkCmdBlitImage</description></item>
 		/// <item><description>vkCmdCopyImage</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const int32_t source_box[6], api::resource dest, uint32_t dest_subresource, const int32_t dest_box[6], api::filter_mode filter)</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const api::box *source_box, api::resource dest, uint32_t dest_subresource, const api::box *dest_box, api::filter_mode filter)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1178,7 +1122,7 @@ namespace reshade
 		/// <item><description>ID3D12GraphicsCommandList::CopyTextureRegion</description></item>
 		/// <item><description>vkCmdCopyImageToBuffer</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const int32_t source_box[6], api::resource dest, uint64_t dest_offset, uint32_t row_length, uint32_t slice_height)</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const api::box *source_box, api::resource dest, uint64_t dest_offset, uint32_t row_length, uint32_t slice_height)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1199,7 +1143,7 @@ namespace reshade
 		/// <item><description>glBlitNamedFramebuffer</description></item>
 		/// <item><description>vkCmdResolveImage</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const int32_t source_box[6], api::resource dest, uint32_t dest_subresource, const int32_t dest_offset[3], api::format format)</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const api::rect *source_rect, api::resource dest, uint32_t dest_subresource, int32_t dest_x, int32_t dest_y, api::format format)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1212,32 +1156,19 @@ namespace reshade
 		/// Called before:
 		/// <list type="bullet">
 		/// <item><description>IDirect3DDevice9::Clear</description></item>
-		/// <item><description>glClear</description></item>
-		/// <item><description>vkCmdClearAttachments</description></item>
-		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::attachment_type clear_flags, const float color[4], float depth, uint8_t stencil, uint32_t rect_count, const int32_t *rects)</c></para>
-		/// </summary>
-		/// <remarks>
-		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
-		/// </remarks>
-		clear_attachments,
-
-		/// <summary>
-		/// Called before:
-		/// <list type="bullet">
 		/// <item><description>ID3D10Device::ClearDepthStencilView</description></item>
 		/// <item><description>ID3D11DeviceContext::ClearDepthStencilView</description></item>
 		/// <item><description>ID3D11DeviceContext1::ClearView (for depth-stencil views)</description></item>
 		/// <item><description>ID3D12GraphicsCommandList::ClearDepthStencilView</description></item>
-		/// <item><description>ID3D12GraphicsCommandList4::BeginRenderPass (if access contains D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR)</description></item>
+		/// <item><description>glClear</description></item>
 		/// <item><description>glClearBufferfi</description></item>
 		/// <item><description>glClearBufferfv</description></item>
 		/// <item><description>glClearNamedFramebufferfi</description></item>
 		/// <item><description>glClearNamedFramebufferfv</description></item>
 		/// <item><description>vkCmdClearDepthStencilImage</description></item>
-		/// <item><description>vkCmdBeginRenderPass (if any attachments are cleared)</description></item>
+		/// <item><description>vkCmdClearAttachments</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view dsv, api::attachment_type clear_flags, float depth, uint8_t stencil, uint32_t rect_count, const int32_t *rects)</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view dsv, const float *depth, const uint8_t *stencil, uint32_t rect_count, const api::rect *rects)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1248,18 +1179,19 @@ namespace reshade
 		/// <summary>
 		/// Called before:
 		/// <list type="bullet">
+		/// <item><description>IDirect3DDevice9::Clear</description></item>
 		/// <item><description>IDirect3DDevice9::ColorFill</description></item>
 		/// <item><description>ID3D10Device::ClearRenderTargetView</description></item>
 		/// <item><description>ID3D11DeviceContext::ClearRenderTargetView</description></item>
 		/// <item><description>ID3D11DeviceContext1::ClearView (for render target views)</description></item>
 		/// <item><description>ID3D12GraphicsCommandList::ClearRenderTargetView</description></item>
-		/// <item><description>ID3D12GraphicsCommandList4::BeginRenderPass (if access contains D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR)</description></item>
+		/// <item><description>glClear</description></item>
 		/// <item><description>glClearBufferfv</description></item>
 		/// <item><description>glClearNamedFramebufferfv</description></item>
 		/// <item><description>vkCmdClearColorImage</description></item>
-		/// <item><description>vkCmdBeginRenderPass (if any attachments are cleared)</description></item>
+		/// <item><description>vkCmdClearAttachments</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view rtv, const float color[4], uint32_t rect_count, const int32_t *rects)</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view rtv, const float color[4], uint32_t rect_count, const api::rect *rects)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1273,7 +1205,7 @@ namespace reshade
 		/// <item><description>ID3D11DeviceContext::ClearUnorderedAccessViewUint</description></item>
 		/// <item><description>ID3D12GraphicsCommandList::ClearUnorderedAccessViewUint</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view uav, const uint32_t values[4], uint32_t rect_count, const int32_t *rects)</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view uav, const uint32_t values[4], uint32_t rect_count, const api::rect *rects)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1288,7 +1220,7 @@ namespace reshade
 		/// <item><description>ID3D11DeviceContext1::ClearView (for unordered access views)</description></item>
 		/// <item><description>ID3D12GraphicsCommandList::ClearUnorderedAccessViewFloat</description></item>
 		/// </list>
-		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view uav, const float values[4], uint32_t rect_count, const int32_t *rects)</c></para>
+		/// <para>Callback function signature: <c>bool (api::command_list *cmd_list, api::resource_view uav, const float values[4], uint32_t rect_count, const api::rect *rects)</c></para>
 		/// </summary>
 		/// <remarks>
 		/// To prevent this command from being executed, return <see langword="true"/>, otherwise return <see langword="false"/>.
@@ -1429,34 +1361,30 @@ namespace reshade
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::create_pipeline, bool, api::device *device, api::pipeline_desc &desc, uint32_t dynamic_state_count, const api::dynamic_state *dynamic_states);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::destroy_pipeline, void, api::device *device, api::pipeline pipeline);
 
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::init_render_pass, void, api::device *device, uint32_t attachment_count, const api::attachment_desc *attachments, api::render_pass pass);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::create_render_pass, bool, api::device *device, uint32_t attachment_count, api::attachment_desc *attachments);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::destroy_render_pass, void, api::device *device, api::render_pass pass);
-
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::init_framebuffer, void, api::device *device, api::render_pass render_pass_template, uint32_t attachment_count, const api::resource_view *attachments, api::framebuffer fbo);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::create_framebuffer, bool, api::device *device, api::render_pass render_pass_template, uint32_t attachment_count, api::resource_view *attachments);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::destroy_framebuffer, void, api::device *device, api::framebuffer fbo);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::init_pipeline_layout, void, api::device *device, uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout layout);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::create_pipeline_layout, bool, api::device *device, uint32_t param_count, const api::pipeline_layout_param *params);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::destroy_pipeline_layout, void, api::device *device, api::pipeline_layout layout);
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::map_buffer_region, void, api::device *device, api::resource resource, uint64_t offset, uint64_t size, api::map_access access, void **data);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::unmap_buffer_region, void, api::device *device, api::resource resource);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::map_texture_region, void, api::device *device, api::resource resource, uint32_t subresource, const int32_t box[6], api::map_access access, api::subresource_data *data);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::map_texture_region, void, api::device *device, api::resource resource, uint32_t subresource, const api::subresource_box *box, api::map_access access, api::subresource_data *data);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::unmap_texture_region, void, api::device *device, api::resource resource, uint32_t subresource);
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::update_buffer_region, bool, api::device *device, const void *data, api::resource resource, uint64_t offset, uint64_t size);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::update_texture_region, bool, api::device *device, const api::subresource_data &data, api::resource resource, uint32_t subresource, const int32_t box[6]);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::update_texture_region, bool, api::device *device, const api::subresource_data &data, api::resource resource, uint32_t subresource, const api::subresource_box *box);
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::update_descriptor_sets, bool, api::device *device, uint32_t count, const api::descriptor_set_update *updates);
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::barrier, void, api::command_list *cmd_list, uint32_t count, const api::resource *resources, const api::resource_usage *old_states, const api::resource_usage *new_states);
 
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::begin_render_pass, void, api::command_list *cmd_list, api::render_pass pass, api::framebuffer fbo, uint32_t clear_value_count, const void *clear_values);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::begin_render_pass, void, api::command_list *cmd_list, uint32_t count, const api::render_pass_render_target_desc *rts, const api::render_pass_depth_stencil_desc *ds);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::end_render_pass, void, api::command_list *cmd_list);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_render_targets_and_depth_stencil, void, api::command_list *cmd_list, uint32_t count, const api::resource_view *rtvs, api::resource_view dsv);
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_pipeline, void, api::command_list *cmd_list, api::pipeline_stage type, api::pipeline pipeline);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_pipeline_states, void, api::command_list *cmd_list, uint32_t count, const api::dynamic_state *states, const uint32_t *values);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_viewports, void, api::command_list *cmd_list, uint32_t first, uint32_t count, const float *viewports);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_scissor_rects, void, api::command_list *cmd_list, uint32_t first, uint32_t count, const int32_t *rects);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_viewports, void, api::command_list *cmd_list, uint32_t first, uint32_t count, const api::viewport *viewports);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_scissor_rects, void, api::command_list *cmd_list, uint32_t first, uint32_t count, const api::rect *rects);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::push_constants, void, api::command_list *cmd_list, api::shader_stage stages, api::pipeline_layout layout, uint32_t layout_param, uint32_t first, uint32_t count, const uint32_t *values);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::push_descriptors, void, api::command_list *cmd_list, api::shader_stage stages, api::pipeline_layout layout, uint32_t layout_param, const api::descriptor_set_update &update);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::bind_descriptor_sets, void, api::command_list *cmd_list, api::shader_stage stages, api::pipeline_layout layout, uint32_t first, uint32_t count, const api::descriptor_set *sets);
@@ -1470,16 +1398,15 @@ namespace reshade
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_resource, bool, api::command_list *cmd_list, api::resource source, api::resource dest);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_buffer_region, bool, api::command_list *cmd_list, api::resource source, uint64_t source_offset, api::resource dest, uint64_t dest_offset, uint64_t size);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_buffer_to_texture, bool, api::command_list *cmd_list, api::resource source, uint64_t source_offset, uint32_t row_length, uint32_t slice_height, api::resource dest, uint32_t dest_subresource, const int32_t dest_box[6]);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_texture_region, bool, api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const int32_t source_box[6], api::resource dest, uint32_t dest_subresource, const int32_t dest_box[6], api::filter_mode filter);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_texture_to_buffer, bool, api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const int32_t source_box[6], api::resource dest, uint64_t dest_offset, uint32_t row_length, uint32_t slice_height);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::resolve_texture_region, bool, api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const int32_t source_box[6], api::resource dest, uint32_t dest_subresource, const int32_t dest_offset[3], api::format format);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_buffer_to_texture, bool, api::command_list *cmd_list, api::resource source, uint64_t source_offset, uint32_t row_length, uint32_t slice_height, api::resource dest, uint32_t dest_subresource, const api::subresource_box *dest_box);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_texture_region, bool, api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const api::subresource_box *source_box, api::resource dest, uint32_t dest_subresource, const api::subresource_box *dest_box, api::filter_mode filter);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::copy_texture_to_buffer, bool, api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const api::subresource_box *source_box, api::resource dest, uint64_t dest_offset, uint32_t row_length, uint32_t slice_height);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::resolve_texture_region, bool, api::command_list *cmd_list, api::resource source, uint32_t source_subresource, const api::rect *source_rect, api::resource dest, uint32_t dest_subresource, int32_t dest_x, int32_t dest_y, api::format format);
 
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_attachments, bool, api::command_list *cmd_list, api::attachment_type clear_flags, const float color[4], float depth, uint8_t stencil, uint32_t rect_count, const int32_t *rects);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_depth_stencil_view, bool, api::command_list *cmd_list, api::resource_view dsv, api::attachment_type clear_flags, float depth, uint8_t stencil, uint32_t rect_count, const int32_t *rects);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_render_target_view, bool, api::command_list *cmd_list, api::resource_view rtv, const float color[4], uint32_t rect_count, const int32_t *rects);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_unordered_access_view_uint, bool, api::command_list *cmd_list, api::resource_view uav, const uint32_t values[4], uint32_t rect_count, const int32_t *rects);
-	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_unordered_access_view_float, bool, api::command_list *cmd_list, api::resource_view uav, const float values[4], uint32_t rect_count, const int32_t *rects);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_depth_stencil_view, bool, api::command_list *cmd_list, api::resource_view dsv, const float *depth, const uint8_t *stencil, uint32_t rect_count, const api::rect *rects);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_render_target_view, bool, api::command_list *cmd_list, api::resource_view rtv, const float color[4], uint32_t rect_count, const api::rect *rects);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_unordered_access_view_uint, bool, api::command_list *cmd_list, api::resource_view uav, const uint32_t values[4], uint32_t rect_count, const api::rect *rects);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::clear_unordered_access_view_float, bool, api::command_list *cmd_list, api::resource_view uav, const float values[4], uint32_t rect_count, const api::rect *rects);
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::generate_mipmaps, bool, api::command_list *cmd_list, api::resource_view srv);
 

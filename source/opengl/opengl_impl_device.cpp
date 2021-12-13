@@ -89,7 +89,7 @@ reshade::opengl::device_impl::device_impl(HDC initial_hdc, HGLRC hglrc, bool com
 	glGenBuffers(1, &_push_constants);
 
 	// Generate copy framebuffers
-	glGenFramebuffers(2, _copy_fbo);
+	glGenFramebuffers(3, _copy_fbo);
 
 	// Create mipmap generation program used in the 'generate_mipmaps' function
 	{
@@ -124,14 +124,14 @@ reshade::opengl::device_impl::device_impl(HDC initial_hdc, HGLRC hglrc, bool com
 	invoke_addon_event<addon_event::init_command_queue>(this);
 
 	// Communicate default state to add-ons
-	invoke_addon_event<addon_event::begin_render_pass>(this, api::render_pass { 0 }, make_framebuffer_handle(0), 0, nullptr);
+	const api::resource_view default_rtv = make_resource_view_handle(GL_FRAMEBUFFER_DEFAULT, GL_BACK);
+	const api::resource_view default_dsv = _default_depth_format != GL_NONE ? make_resource_view_handle(GL_FRAMEBUFFER_DEFAULT, GL_DEPTH_STENCIL_ATTACHMENT) : make_resource_view_handle(0, 0);
+	invoke_addon_event<addon_event::bind_render_targets_and_depth_stencil>(this, 1, &default_rtv, default_dsv);
 #endif
 }
 reshade::opengl::device_impl::~device_impl()
 {
 #if RESHADE_ADDON
-	invoke_addon_event<addon_event::end_render_pass>(this);
-
 	invoke_addon_event<addon_event::destroy_command_queue>(this);
 	invoke_addon_event<addon_event::destroy_command_list>(this);
 	invoke_addon_event<addon_event::destroy_device>(this);
@@ -143,7 +143,7 @@ reshade::opengl::device_impl::~device_impl()
 	glDeleteProgram(_mipmap_program);
 
 	// Destroy framebuffers used in 'copy_resource' implementation
-	glDeleteFramebuffers(2, _copy_fbo);
+	glDeleteFramebuffers(3, _copy_fbo);
 
 	// Destroy push constants buffer
 	glDeleteBuffers(1, &_push_constants);
@@ -175,7 +175,6 @@ bool reshade::opengl::device_impl::check_capability(api::device_caps capability)
 	case api::device_caps::conservative_rasterization:
 		return false;
 	case api::device_caps::bind_render_targets_and_depth_stencil:
-		return false;
 	case api::device_caps::multi_viewport:
 		return true;
 	case api::device_caps::partial_push_constant_updates:
@@ -200,6 +199,9 @@ bool reshade::opengl::device_impl::check_capability(api::device_caps capability)
 		return value > 1;
 	case api::device_caps::sampler_with_resource_view:
 		return true;
+	case api::device_caps::shared_resource:
+	case api::device_caps::shared_resource_nt_handle:
+		// TODO: Implement using 'GL_EXT_memory_object' and 'GL_EXT_memory_object_win32' extensions
 	default:
 		return false;
 	}
@@ -215,7 +217,7 @@ bool reshade::opengl::device_impl::check_format_support(api::format format, api:
 
 	GLint supported_depth = GL_TRUE;
 	GLint supported_stencil = GL_TRUE;
-	if ((usage & api::resource_usage::depth_stencil) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::depth_stencil) != 0)
 	{
 		glGetInternalformativ(GL_TEXTURE_2D, internal_format, GL_DEPTH_RENDERABLE, 1, &supported_depth);
 		glGetInternalformativ(GL_TEXTURE_2D, internal_format, GL_STENCIL_RENDERABLE, 1, &supported_stencil);
@@ -223,7 +225,7 @@ bool reshade::opengl::device_impl::check_format_support(api::format format, api:
 
 	GLint supported_color_render = GL_TRUE;
 	GLint supported_render_target = GL_CAVEAT_SUPPORT;
-	if ((usage & api::resource_usage::render_target) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::render_target) != 0)
 	{
 		glGetInternalformativ(GL_TEXTURE_2D, internal_format, GL_COLOR_RENDERABLE, 1, &supported_color_render);
 		glGetInternalformativ(GL_TEXTURE_2D, internal_format, GL_FRAMEBUFFER_RENDERABLE, 1, &supported_render_target);
@@ -231,7 +233,7 @@ bool reshade::opengl::device_impl::check_format_support(api::format format, api:
 
 	GLint supported_unordered_access_load = GL_CAVEAT_SUPPORT;
 	GLint supported_unordered_access_store = GL_CAVEAT_SUPPORT;
-	if ((usage & api::resource_usage::unordered_access) != api::resource_usage::undefined)
+	if ((usage & api::resource_usage::unordered_access) != 0)
 	{
 		glGetInternalformativ(GL_TEXTURE_2D, internal_format, GL_SHADER_IMAGE_LOAD, 1, &supported_unordered_access_load);
 		glGetInternalformativ(GL_TEXTURE_2D, internal_format, GL_SHADER_IMAGE_STORE, 1, &supported_unordered_access_store);
@@ -333,8 +335,10 @@ void reshade::opengl::device_impl::destroy_sampler(api::sampler handle)
 	glDeleteSamplers(1, &object);
 }
 
-bool reshade::opengl::device_impl::create_resource(const api::resource_desc &desc, const api::subresource_data *initial_data, api::resource_usage, api::resource *out_handle)
+bool reshade::opengl::device_impl::create_resource(const api::resource_desc &desc, const api::subresource_data *initial_data, api::resource_usage, api::resource *out_handle, HANDLE *shared_handle)
 {
+	*out_handle = { 0 };
+
 	GLenum target = GL_NONE;
 	switch (desc.type)
 	{
@@ -363,7 +367,7 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 		target = desc.texture.depth_or_layers > 1 ? GL_TEXTURE_1D_ARRAY : GL_TEXTURE_1D;
 		break;
 	case api::resource_type::texture_2d:
-		if ((desc.flags & api::resource_flags::cube_compatible) != api::resource_flags::cube_compatible)
+		if ((desc.flags & api::resource_flags::cube_compatible) == 0)
 			target = desc.texture.depth_or_layers > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
 		else
 			target = desc.texture.depth_or_layers > 6 ? GL_TEXTURE_CUBE_MAP_ARRAY : GL_TEXTURE_CUBE_MAP;
@@ -372,9 +376,30 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 		target = GL_TEXTURE_3D;
 		break;
 	default:
-		*out_handle = { 0 };
 		return false;
 	}
+
+#if 0
+	GLenum shared_handle_type = GL_NONE;
+	if ((desc.flags & api::resource_flags::shared) != 0)
+	{
+		// Only import is supported
+		if (shared_handle == nullptr || *shared_handle == nullptr)
+			return false;
+
+		assert(initial_data == nullptr);
+
+		if ((desc.flags & api::resource_flags::shared_nt_handle) != 0)
+			shared_handle_type = GL_HANDLE_TYPE_OPAQUE_WIN32_EXT;
+		else
+			shared_handle_type = GL_HANDLE_TYPE_OPAQUE_WIN32_KMT_EXT;
+	}
+#else
+	UNREFERENCED_PARAMETER(shared_handle);
+
+	if ((desc.flags & api::resource_flags::shared) != 0)
+		return false;
+#endif
 
 	GLuint object = 0;
 	GLuint prev_binding = 0;
@@ -388,10 +413,7 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 	if (desc.type == api::resource_type::buffer)
 	{
 		if (desc.buffer.size == 0)
-		{
-			*out_handle = { 0 };
 			return false;
-		}
 
 		glGenBuffers(1, &object);
 		glBindBuffer(target, object);
@@ -404,7 +426,23 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 			usage_flags |= GL_DYNAMIC_STORAGE_BIT;
 
 		assert(desc.buffer.size <= static_cast<uint64_t>(std::numeric_limits<GLsizeiptr>::max()));
-		glBufferStorage(target, static_cast<GLsizeiptr>(desc.buffer.size), nullptr, usage_flags);
+
+#if 0
+		if (shared_handle_type != GL_NONE)
+		{
+			GLuint mem = 0;
+			glCreateMemoryObjectsEXT(1, &mem);
+			glImportMemoryWin32HandleEXT(mem, desc.buffer.size, shared_handle_type, *shared_handle);
+
+			glBufferStorageMemEXT(target, static_cast<GLsizeiptr>(desc.buffer.size), mem, 0);
+
+			glDeleteMemoryObjectsEXT(1, &mem);
+		}
+		else
+#endif
+		{
+			glBufferStorage(target, static_cast<GLsizeiptr>(desc.buffer.size), nullptr, usage_flags);
+		}
 
 		status = glGetError();
 
@@ -421,8 +459,6 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 		if (status != GL_NO_ERROR)
 		{
 			glDeleteBuffers(1, &object);
-
-			*out_handle = { 0 };
 			return false;
 		}
 	}
@@ -432,37 +468,73 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 
 		const GLenum internal_format = convert_format(desc.texture.format, swizzle_mask);
 		if (desc.texture.width == 0 || internal_format == GL_NONE)
-		{
-			*out_handle = { 0 };
 			return false;
-		}
 
 		glGenTextures(1, &object);
 		glBindTexture(target, object);
 
 		GLuint depth_or_layers = desc.texture.depth_or_layers;
-		switch (target)
+
+#if 0
+		if (shared_handle_type != GL_NONE)
 		{
-		case GL_TEXTURE_1D:
-			glTexStorage1D(target, desc.texture.levels, internal_format, desc.texture.width);
-			break;
-		case GL_TEXTURE_1D_ARRAY:
-			glTexStorage2D(target, desc.texture.levels, internal_format, desc.texture.width, depth_or_layers);
-			break;
-		case GL_TEXTURE_CUBE_MAP:
-			assert(depth_or_layers == 6);
-			[[fallthrough]];
-		case GL_TEXTURE_2D:
-			glTexStorage2D(target, desc.texture.levels, internal_format, desc.texture.width, desc.texture.height);
-			break;
-		case GL_TEXTURE_CUBE_MAP_ARRAY:
-			assert((depth_or_layers % 6) == 0);
-			depth_or_layers /= 6;
-			[[fallthrough]];
-		case GL_TEXTURE_2D_ARRAY:
-		case GL_TEXTURE_3D:
-			glTexStorage3D(target, desc.texture.levels, internal_format, desc.texture.width, desc.texture.height, depth_or_layers);
-			break;
+			GLuint mem = 0;
+			glCreateMemoryObjectsEXT(1, &mem);
+
+			GLuint64 import_size = // TODO: Mipmap levels
+				api::format_slice_pitch(desc.texture.format,
+					api::format_row_pitch(desc.texture.format, desc.texture.width), desc.texture.height) * desc.texture.depth_or_layers;
+
+			glImportMemoryWin32HandleEXT(mem, import_size, shared_handle_type, *shared_handle);
+
+			switch (target)
+			{
+			case GL_TEXTURE_CUBE_MAP:
+				assert(depth_or_layers == 6);
+				[[fallthrough]];
+			case GL_TEXTURE_1D:
+			case GL_TEXTURE_1D_ARRAY:
+			case GL_TEXTURE_2D:
+				glTexStorageMem2DEXT(target, desc.texture.levels, internal_format, desc.texture.width, desc.texture.height, mem, 0);
+				break;
+			case GL_TEXTURE_CUBE_MAP_ARRAY:
+				assert((depth_or_layers % 6) == 0);
+				depth_or_layers /= 6;
+				[[fallthrough]];
+			case GL_TEXTURE_2D_ARRAY:
+			case GL_TEXTURE_3D:
+				glTexStorageMem3DEXT(target, desc.texture.levels, internal_format, desc.texture.width, desc.texture.height, depth_or_layers, mem, 0);
+				break;
+			}
+
+			glDeleteMemoryObjectsEXT(1, &mem);
+		}
+		else
+#endif
+		{
+			switch (target)
+			{
+			case GL_TEXTURE_1D:
+				glTexStorage1D(target, desc.texture.levels, internal_format, desc.texture.width);
+				break;
+			case GL_TEXTURE_1D_ARRAY:
+				glTexStorage2D(target, desc.texture.levels, internal_format, desc.texture.width, depth_or_layers);
+				break;
+			case GL_TEXTURE_CUBE_MAP:
+				assert(depth_or_layers == 6);
+				[[fallthrough]];
+			case GL_TEXTURE_2D:
+				glTexStorage2D(target, desc.texture.levels, internal_format, desc.texture.width, desc.texture.height);
+				break;
+			case GL_TEXTURE_CUBE_MAP_ARRAY:
+				assert((depth_or_layers % 6) == 0);
+				depth_or_layers /= 6;
+				[[fallthrough]];
+			case GL_TEXTURE_2D_ARRAY:
+			case GL_TEXTURE_3D:
+				glTexStorage3D(target, desc.texture.levels, internal_format, desc.texture.width, desc.texture.height, depth_or_layers);
+				break;
+			}
 		}
 
 		status = glGetError();
@@ -480,8 +552,6 @@ bool reshade::opengl::device_impl::create_resource(const api::resource_desc &des
 		if (status != GL_NO_ERROR)
 		{
 			glDeleteTextures(1, &object);
-
-			*out_handle = { 0 };
 			return false;
 		}
 	}
@@ -689,11 +759,10 @@ void reshade::opengl::device_impl::set_resource_name(api::resource handle, const
 
 bool reshade::opengl::device_impl::create_resource_view(api::resource resource, api::resource_usage, const api::resource_view_desc &desc, api::resource_view *out_handle)
 {
+	*out_handle = { 0 };
+
 	if (resource.handle == 0)
-	{
-		*out_handle = { 0 };
 		return false;
-	}
 
 	const bool is_srgb_format =
 		desc.format != api::format_to_default_typed(desc.format, 0) &&
@@ -740,7 +809,6 @@ bool reshade::opengl::device_impl::create_resource_view(api::resource resource, 
 		target = GL_TEXTURE_CUBE_MAP_ARRAY;
 		break;
 	default:
-		*out_handle = { 0 };
 		return false;
 	}
 
@@ -764,10 +832,7 @@ bool reshade::opengl::device_impl::create_resource_view(api::resource resource, 
 
 	const GLenum internal_format = convert_format(desc.format, texture_swizzle);
 	if (internal_format == GL_NONE)
-	{
-		*out_handle = { 0 };
 		return false;
-	}
 
 	if (target == resource_target &&
 		desc.texture.first_level == 0 && desc.texture.first_layer == 0 && internal_format == resource_format)
@@ -827,8 +892,6 @@ bool reshade::opengl::device_impl::create_resource_view(api::resource resource, 
 	if (status != GL_NO_ERROR)
 	{
 		glDeleteTextures(1, &object);
-
-		*out_handle = { 0 };
 		return false;
 	}
 
@@ -978,8 +1041,6 @@ static bool create_shader_module(GLenum type, const reshade::api::shader_desc &d
 
 bool reshade::opengl::device_impl::create_pipeline(const api::pipeline_desc &desc, uint32_t, const api::dynamic_state *, api::pipeline *out_handle)
 {
-	*out_handle = { 0 };
-
 	switch (desc.type)
 	{
 	case api::pipeline_stage::all_graphics:
@@ -997,11 +1058,14 @@ bool reshade::opengl::device_impl::create_pipeline(const api::pipeline_desc &des
 	case api::pipeline_stage::compute_shader:
 		return create_compute_pipeline(desc, out_handle);
 	default:
+		*out_handle = { 0 };
 		return false;
 	}
 }
 bool reshade::opengl::device_impl::create_compute_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	*out_handle = { 0 };
+
 	GLuint cs;
 	const GLuint program = glCreateProgram();
 
@@ -1033,8 +1097,6 @@ bool reshade::opengl::device_impl::create_compute_pipeline(const api::pipeline_d
 		}
 
 		glDeleteProgram(program);
-
-		*out_handle = { 0 };
 		return false;
 	}
 
@@ -1046,11 +1108,10 @@ bool reshade::opengl::device_impl::create_compute_pipeline(const api::pipeline_d
 }
 bool reshade::opengl::device_impl::create_graphics_pipeline(const api::pipeline_desc &desc, api::pipeline *out_handle)
 {
+	*out_handle = { 0 };
+
 	if (desc.graphics.rasterizer_state.conservative_rasterization)
-	{
-		*out_handle = { 0 };
 		return false;
-	}
 
 	GLuint vs, hs, ds, gs, ps;
 	const GLuint program = glCreateProgram();
@@ -1103,8 +1164,6 @@ bool reshade::opengl::device_impl::create_graphics_pipeline(const api::pipeline_
 		LOG(ERROR) << "Failed to link GLSL program: " << log.data();
 
 		glDeleteProgram(program);
-
-		*out_handle = { 0 };
 		return false;
 	}
 
@@ -1205,145 +1264,12 @@ void reshade::opengl::device_impl::destroy_pipeline(api::pipeline handle)
 	delete impl;
 }
 
-bool reshade::opengl::device_impl::create_render_pass(uint32_t attachment_count, const api::attachment_desc *attachments, api::render_pass *out_handle)
+reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attachment(GLuint fbo_object, GLenum type, uint32_t index) const
 {
-	const auto impl = new render_pass_impl();
-	impl->attachments.assign(attachments, attachments + attachment_count);
-
-	*out_handle = { reinterpret_cast<uintptr_t>(impl) };
-	return true;
-}
-void reshade::opengl::device_impl::destroy_render_pass(api::render_pass handle)
-{
-	delete reinterpret_cast<render_pass_impl *>(handle.handle);
-}
-
-bool reshade::opengl::device_impl::create_framebuffer(api::render_pass render_pass_template, uint32_t attachment_count, const api::resource_view *attachments, api::framebuffer *out_handle)
-{
-	if (render_pass_template.handle == 0)
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-
-	const auto pass_impl = reinterpret_cast<render_pass_impl *>(render_pass_template.handle);
-
-	if (attachment_count > pass_impl->attachments.size())
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-
-	// Can only use both the color and depth-stencil attachments of the default framebuffer together, not bind them individually
-	bool only_default_framebuffer = true;
-	for (uint32_t i = 0; i < attachment_count; ++i)
-	{
-		if ((attachments[i].handle >> 40) != GL_FRAMEBUFFER_DEFAULT)
-		{
-			only_default_framebuffer = false;
-			break;
-		}
-	}
-
-	if (only_default_framebuffer)
-	{
-		*out_handle = make_framebuffer_handle(0);
-		return true;
-	}
-
-	GLuint prev_fbo = 0;
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING, reinterpret_cast<GLint *>(&prev_fbo));
-
-	GLuint fbo_object = 0;
-	glGenFramebuffers(1, &fbo_object);
-	glBindFramebuffer(GL_FRAMEBUFFER, fbo_object);
-
-	bool has_srgb_attachment = false;
-	uint32_t num_color_attachments = 0;
-
-	for (uint32_t i = 0; i < attachment_count; ++i)
-	{
-		GLenum attachment_type = GL_NONE;
-		switch (pass_impl->attachments[i].type)
-		{
-		case api::attachment_type::color:
-			attachment_type = GL_COLOR_ATTACHMENT0 + pass_impl->attachments[i].index;
-			num_color_attachments = std::max(num_color_attachments, pass_impl->attachments[i].index + 1);
-			break;
-		case api::attachment_type::depth:
-			assert(pass_impl->attachments[i].index == 0);
-			attachment_type = GL_DEPTH_ATTACHMENT;
-			break;
-		case api::attachment_type::stencil:
-			assert(pass_impl->attachments[i].index == 0);
-			attachment_type = GL_STENCIL_ATTACHMENT;
-			break;
-		case api::attachment_type::depth_stencil:
-			assert(pass_impl->attachments[i].index == 0);
-			attachment_type = GL_DEPTH_STENCIL_ATTACHMENT;
-			break;
-		}
-
-		switch (attachments[i].handle >> 40)
-		{
-		case GL_TEXTURE_BUFFER:
-		case GL_TEXTURE_1D:
-		case GL_TEXTURE_1D_ARRAY:
-		case GL_TEXTURE_2D:
-		case GL_TEXTURE_2D_ARRAY:
-		case GL_TEXTURE_2D_MULTISAMPLE:
-		case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
-		case GL_TEXTURE_RECTANGLE:
-			glFramebufferTexture(GL_FRAMEBUFFER, attachment_type, attachments[i].handle & 0xFFFFFFFF, 0);
-			break;
-		case GL_RENDERBUFFER:
-			glFramebufferRenderbuffer(GL_FRAMEBUFFER, attachment_type, GL_RENDERBUFFER, attachments[i].handle & 0xFFFFFFFF);
-			break;
-		default:
-			assert(false);
-			glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-			glDeleteFramebuffers(1, &fbo_object);
-			*out_handle = { 0 };
-			return false;
-		}
-
-		if ((attachments[i].handle >> 32) & 0x2)
-			has_srgb_attachment = true;
-	}
-
-	const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-
-	glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-
-	if (status == GL_FRAMEBUFFER_COMPLETE)
-	{
-		*out_handle = make_framebuffer_handle(fbo_object, num_color_attachments, has_srgb_attachment ? 0x2 : 0);
-		return true;
-	}
-	else
-	{
-		glDeleteFramebuffers(1, &fbo_object);
-
-		*out_handle = { 0 };
-		return false;
-	}
-}
-void reshade::opengl::device_impl::destroy_framebuffer(api::framebuffer handle)
-{
-	const GLuint object = handle.handle & 0xFFFFFFFF;
-	glDeleteFramebuffers(1, &object);
-}
-
-reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attachment(api::framebuffer fbo, api::attachment_type type, uint32_t index) const
-{
-	assert(fbo.handle != 0);
-
-	const GLuint fbo_object = fbo.handle & 0xFFFFFFFF;
-
 	// Zero is valid too, in which case the default frame buffer is referenced, instead of a FBO
 	if (fbo_object == 0)
 	{
-		if (type == api::attachment_type::color)
+		if (type == GL_COLOR || type == GL_COLOR_BUFFER_BIT)
 		{
 			return make_resource_view_handle(GL_FRAMEBUFFER_DEFAULT, GL_BACK);
 		}
@@ -1357,38 +1283,30 @@ reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attach
 		}
 	}
 
-	const bool has_srgb_attachment = ((fbo.handle >> 32) & 0x2) != 0;
-	const uint32_t num_color_attachments = (fbo.handle >> 40);
-
-	GLenum attachment = GL_NONE;
+	GLenum attachment;
 	switch (type)
 	{
-	case api::attachment_type::color:
+	case GL_COLOR:
+	case GL_COLOR_BUFFER_BIT:
 		attachment = GL_COLOR_ATTACHMENT0 + index;
-		if (index >= num_color_attachments)
-		{
-			return make_resource_view_handle(0, 0);
-		}
 		break;
-	case api::attachment_type::depth:
+	case GL_DEPTH:
+	case GL_DEPTH_BUFFER_BIT:
 		attachment = GL_DEPTH_ATTACHMENT;
 		break;
-	case api::attachment_type::stencil:
+	case GL_STENCIL:
+	case GL_STENCIL_BUFFER_BIT:
 		attachment = GL_STENCIL_ATTACHMENT;
 		break;
+	case GL_DEPTH_STENCIL:
+	case GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT:
+		attachment = GL_DEPTH_STENCIL_ATTACHMENT;
+		break;
 	default:
-		if (type == (api::attachment_type::depth | api::attachment_type::stencil))
-		{
-			attachment = GL_DEPTH_STENCIL_ATTACHMENT;
-			break;
-		}
-		else
-		{
-			return make_resource_view_handle(0, 0);
-		}
+		return make_resource_view_handle(0, 0);
 	}
 
-	GLenum target = GL_NONE, object = 0;
+	GLenum target = GL_NONE, object = 0, format = GL_NONE;
 	if (_supports_dsa)
 	{
 		glGetNamedFramebufferAttachmentParameteriv(fbo_object, attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, reinterpret_cast<GLint *>(&target));
@@ -1398,9 +1316,17 @@ reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attach
 		{
 			glGetNamedFramebufferAttachmentParameteriv(fbo_object, attachment, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, reinterpret_cast<GLint *>(&object));
 
-			// Get actual texture target from the texture object
 			if (target == GL_TEXTURE)
+			{
+				// Get actual texture target from the texture object
 				glGetTextureParameteriv(object, GL_TEXTURE_TARGET, reinterpret_cast<GLint *>(&target));
+
+				glGetTextureLevelParameteriv(object, 0, GL_TEXTURE_INTERNAL_FORMAT, reinterpret_cast<GLint *>(&format));
+			}
+			else if (target == GL_RENDERBUFFER)
+			{
+				glGetNamedRenderbufferParameteriv(object, GL_RENDERBUFFER_INTERNAL_FORMAT, reinterpret_cast<GLint *>(&format));
+			}
 		}
 	}
 	else
@@ -1419,56 +1345,84 @@ reshade::api::resource_view reshade::opengl::device_impl::get_framebuffer_attach
 		glBindFramebuffer(GL_FRAMEBUFFER, prev_object);
 	}
 
+	const bool has_srgb_attachment = convert_format(format) != api::format_to_default_typed(convert_format(format), 0);
+
 	// TODO: Create view based on 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL', 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE' and 'GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER'
-	return make_resource_view_handle(target, object, type == api::attachment_type::color && has_srgb_attachment ? 0x2 : 0);
+	return make_resource_view_handle(target, object, (type == GL_COLOR || type == GL_COLOR_BUFFER_BIT) && has_srgb_attachment ? 0x2 : 0);
 }
 
 bool reshade::opengl::device_impl::create_pipeline_layout(uint32_t param_count, const api::pipeline_layout_param *params, api::pipeline_layout *out_handle)
 {
-	const auto impl = new pipeline_layout_impl();
-	impl->params.assign(params, params + param_count);
-	impl->bindings.resize(param_count);
+	*out_handle = { 0 };
 
-	bool success = true;
+	std::vector<api::descriptor_range> ranges(param_count);
 
 	for (uint32_t i = 0; i < param_count; ++i)
 	{
-		if (params[i].type != api::pipeline_layout_param_type::push_constants)
-		{
-			const auto set_layout_impl = reinterpret_cast<const descriptor_set_layout_impl *>(params[i].descriptor_layout.handle);
+		api::descriptor_range &merged_range = ranges[i];
 
-			if (set_layout_impl == nullptr)
+		switch (params[i].type)
+		{
+		case api::pipeline_layout_param_type::descriptor_set:
+			if (params[i].descriptor_set.count == 0)
+				return false;
+
+			merged_range = params[i].descriptor_set.ranges[0];
+
+			for (uint32_t k = 1; k < params[i].descriptor_set.count; ++i)
 			{
-				success = false;
-				break;
-			}
+				const api::descriptor_range &range = params[i].descriptor_set.ranges[k];
 
-			impl->bindings[i] = set_layout_impl->range.binding;
-		}
-		else
-		{
+				if (range.type != merged_range.type || range.array_size > 1)
+					return false;
+
+				if (range.offset >= merged_range.offset)
+				{
+					const uint32_t distance = range.offset - merged_range.offset;
+
+					if ((range.binding - merged_range.binding) != distance)
+						return false;
+
+					merged_range.count += distance;
+					merged_range.visibility |= range.visibility;
+				}
+				else
+				{
+					const uint32_t distance = merged_range.offset - range.offset;
+
+					if ((merged_range.binding - range.binding) != distance)
+						return false;
+
+					merged_range.offset = range.offset;
+					merged_range.binding = range.binding;
+					merged_range.dx_register_index = range.dx_register_index;
+					merged_range.count += distance;
+					merged_range.visibility |= range.visibility;
+				}
+			}
+			break;
+		case api::pipeline_layout_param_type::push_descriptors:
+			merged_range = params[i].push_descriptors;
+			break;
+		case api::pipeline_layout_param_type::push_constants:
 			if (params[i].push_constants.offset != 0)
-			{
-				success = false;
-				break;
-			}
+				return false;
 
-			impl->bindings[i] = params[i].push_constants.binding;
+			merged_range.binding = params[i].push_constants.binding;
+			break;
 		}
 	}
 
-	if (success)
-	{
-		*out_handle = { reinterpret_cast<uintptr_t>(impl) };
-		return true;
-	}
-	else
-	{
-		delete impl;
+	const auto impl = new pipeline_layout_impl();
+	impl->params.assign(params, params + param_count);
+	impl->ranges = std::move(ranges);
 
-		*out_handle = { 0 };
-		return false;
-	}
+	for (uint32_t i = 0; i < param_count; ++i)
+		if (params[i].type == api::pipeline_layout_param_type::descriptor_set)
+			impl->params[i].descriptor_set.ranges = &impl->ranges[i];
+
+	*out_handle = { reinterpret_cast<uintptr_t>(impl) };
+	return true;
 }
 void reshade::opengl::device_impl::destroy_pipeline_layout(api::pipeline_layout handle)
 {
@@ -1477,7 +1431,7 @@ void reshade::opengl::device_impl::destroy_pipeline_layout(api::pipeline_layout 
 	delete reinterpret_cast<pipeline_layout_impl *>(handle.handle);
 }
 
-reshade::api::pipeline_layout_param reshade::opengl::device_impl::get_pipeline_layout_param(api::pipeline_layout layout, uint32_t index) const
+reshade::api::pipeline_layout_param reshade::opengl::device_impl::get_pipeline_layout_param(api::pipeline_layout layout, uint32_t layout_param) const
 {
 	assert(layout.handle != 0);
 
@@ -1485,23 +1439,35 @@ reshade::api::pipeline_layout_param reshade::opengl::device_impl::get_pipeline_l
 
 	if (layout == global_pipeline_layout)
 	{
-		switch (index)
+		switch (layout_param)
 		{
 		case 0:
 			param.type = api::pipeline_layout_param_type::push_descriptors;
-			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF0 };
+			glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, reinterpret_cast<GLint *>(&param.push_descriptors.count));
+			param.push_descriptors.array_size = 1;
+			param.push_descriptors.type = api::descriptor_type::sampler_with_resource_view;
+			param.push_descriptors.visibility = api::shader_stage::all;
 			break;
 		case 1:
 			param.type = api::pipeline_layout_param_type::push_descriptors;
-			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF1 };
+			glGetIntegerv(GL_MAX_IMAGE_UNITS, reinterpret_cast<GLint *>(&param.push_descriptors.count));
+			param.push_descriptors.array_size = 1;
+			param.push_descriptors.type = api::descriptor_type::unordered_access_view;
+			param.push_descriptors.visibility = api::shader_stage::all;
 			break;
 		case 2:
 			param.type = api::pipeline_layout_param_type::push_descriptors;
-			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF2 };
+			glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, reinterpret_cast<GLint *>(&param.push_descriptors.count));
+			param.push_descriptors.array_size = 1;
+			param.push_descriptors.type = api::descriptor_type::constant_buffer;
+			param.push_descriptors.visibility = api::shader_stage::all;
 			break;
 		case 3:
 			param.type = api::pipeline_layout_param_type::push_descriptors;
-			param.descriptor_layout = { 0xFFFFFFFFFFFFFFF3 };
+			glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, reinterpret_cast<GLint *>(&param.push_descriptors.count));
+			param.push_descriptors.array_size = 1;
+			param.push_descriptors.type = api::descriptor_type::shader_storage_buffer;
+			param.push_descriptors.visibility = api::shader_stage::all;
 			break;
 
 		case 4:
@@ -1524,126 +1490,19 @@ reshade::api::pipeline_layout_param reshade::opengl::device_impl::get_pipeline_l
 	{
 		const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
 
-		if (index < layout_impl->params.size())
-			param = layout_impl->params[index];
+		if (layout_param < layout_impl->params.size())
+			param = layout_impl->params[layout_param];
 	}
 
 	return param;
 }
 
-bool reshade::opengl::device_impl::create_descriptor_set_layout(uint32_t range_count, const api::descriptor_range *ranges, bool, api::descriptor_set_layout *out_handle)
-{
-	bool success = true;
-	api::descriptor_range merged_range = range_count ? ranges[0] : api::descriptor_range {};
-
-	for (uint32_t i = 1; i < range_count && success; ++i)
-	{
-		if (ranges[i].type != merged_range.type || ranges[i].dx_register_space != 0 || ranges[i].array_size > 1)
-			success = false;
-
-		if (ranges[i].offset >= merged_range.offset)
-		{
-			const uint32_t distance = ranges[i].offset - merged_range.offset;
-
-			if ((ranges[i].binding - merged_range.binding) != distance)
-				success = false;
-
-			merged_range.count += distance;
-			merged_range.visibility |= ranges[i].visibility;
-		}
-		else
-		{
-			const uint32_t distance = merged_range.offset - ranges[i].offset;
-
-			if ((merged_range.binding - ranges[i].binding) != distance)
-				success = false;
-
-			merged_range.offset = ranges[i].offset;
-			merged_range.binding = ranges[i].binding;
-			merged_range.dx_register_index = ranges[i].dx_register_index;
-			merged_range.count += distance;
-			merged_range.visibility |= ranges[i].visibility;
-		}
-	}
-
-	if (success)
-	{
-		const auto impl = new descriptor_set_layout_impl();
-		impl->range = merged_range;
-
-		*out_handle = { reinterpret_cast<uintptr_t>(impl) };
-		return true;
-	}
-	else
-	{
-		*out_handle = { 0 };
-		return false;
-	}
-}
-void reshade::opengl::device_impl::destroy_descriptor_set_layout(api::descriptor_set_layout handle)
-{
-	delete reinterpret_cast<descriptor_set_layout_impl *>(handle.handle);
-}
-
-void reshade::opengl::device_impl::get_descriptor_set_layout_ranges(api::descriptor_set_layout layout, uint32_t *count, api::descriptor_range *ranges) const
-{
-	assert(layout.handle != 0 && count != nullptr);
-
-	if (ranges != nullptr && *count != 0)
-	{
-		if (layout.handle >= 0xFFFFFFFFFFFFFFF0)
-		{
-			ranges[0].offset = 0;
-			ranges[0].binding = 0;
-			ranges[0].dx_register_index = 0;
-			ranges[0].dx_register_space = 0;
-
-			switch (layout.handle - 0xFFFFFFFFFFFFFFF0)
-			{
-			case 0:
-				glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, reinterpret_cast<GLint *>(&ranges[0].count));
-				ranges[0].array_size = 1;
-				ranges[0].type = api::descriptor_type::sampler_with_resource_view;
-				ranges[0].visibility = api::shader_stage::all;
-				break;
-			case 1:
-				glGetIntegerv(GL_MAX_IMAGE_UNITS, reinterpret_cast<GLint *>(&ranges[0].count));
-				ranges[0].array_size = 1;
-				ranges[0].type = api::descriptor_type::unordered_access_view;
-				ranges[0].visibility = api::shader_stage::all;
-				break;
-			case 2:
-				glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, reinterpret_cast<GLint *>(&ranges[0].count));
-				ranges[0].array_size = 1;
-				ranges[0].type = api::descriptor_type::constant_buffer;
-				ranges[0].visibility = api::shader_stage::all;
-				break;
-			case 3:
-				glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, reinterpret_cast<GLint *>(&ranges[0].count));
-				ranges[0].array_size = 1;
-				ranges[0].type = api::descriptor_type::shader_storage_buffer;
-				ranges[0].visibility = api::shader_stage::all;
-				break;
-			}
-		}
-		else
-		{
-			const auto layout_impl = reinterpret_cast<descriptor_set_layout_impl *>(layout.handle);
-
-			ranges[0] = layout_impl->range;
-		}
-	}
-
-	*count = 1;
-}
-
 bool reshade::opengl::device_impl::create_query_pool(api::query_type type, uint32_t size, api::query_pool *out_handle)
 {
+	*out_handle = { 0 };
+
 	if (type == api::query_type::pipeline_statistics)
-	{
-		*out_handle = { 0 };
 		return false;
-	}
 
 	const auto impl = new query_pool_impl();
 	impl->queries.resize(size);
@@ -1681,21 +1540,21 @@ void reshade::opengl::device_impl::destroy_query_pool(api::query_pool handle)
 	delete impl;
 }
 
-bool reshade::opengl::device_impl::create_descriptor_sets(uint32_t count, const api::descriptor_set_layout *layouts, api::descriptor_set *out_sets)
+bool reshade::opengl::device_impl::create_descriptor_sets(uint32_t count, api::pipeline_layout layout, uint32_t layout_param, api::descriptor_set *out_sets)
 {
+	const auto layout_impl = reinterpret_cast<const pipeline_layout_impl *>(layout.handle);
+
 	for (uint32_t i = 0; i < count; ++i)
 	{
-		const auto set_layout_impl = reinterpret_cast<const descriptor_set_layout_impl *>(layouts[i].handle);
-
-		if (set_layout_impl == nullptr)
+		if (layout_impl == nullptr)
 		{
 			out_sets[i] = { 0 };
 			continue;
 		}
 
 		const auto impl = new descriptor_set_impl();
-		impl->type = set_layout_impl->range.type;
-		impl->count = set_layout_impl->range.count;
+		impl->type = layout_impl->ranges[layout_param].type;
+		impl->count = layout_impl->ranges[layout_param].count;
 
 		switch (impl->type)
 		{
@@ -1805,7 +1664,7 @@ void reshade::opengl::device_impl::unmap_buffer_region(api::resource resource)
 		glBindBuffer(GL_COPY_WRITE_BUFFER, prev_object);
 	}
 }
-bool reshade::opengl::device_impl::map_texture_region(api::resource, uint32_t, const int32_t[6], api::map_access, api::subresource_data *out_data)
+bool reshade::opengl::device_impl::map_texture_region(api::resource, uint32_t, const api::subresource_box *, api::map_access, api::subresource_data *out_data)
 {
 	if (out_data != nullptr)
 	{
@@ -1843,7 +1702,7 @@ void reshade::opengl::device_impl::update_buffer_region(const void *data, api::r
 		glBindBuffer(GL_COPY_WRITE_BUFFER, prev_binding);
 	}
 }
-void reshade::opengl::device_impl::update_texture_region(const api::subresource_data &data, api::resource resource, uint32_t subresource, const int32_t box[6])
+void reshade::opengl::device_impl::update_texture_region(const api::subresource_data &data, api::resource resource, uint32_t subresource, const api::subresource_box *box)
 {
 	assert(resource.handle != 0);
 
@@ -1911,12 +1770,12 @@ void reshade::opengl::device_impl::update_texture_region(const api::subresource_
 	GLuint xoffset, yoffset, zoffset, width, height, depth;
 	if (box != nullptr)
 	{
-		xoffset = box[0];
-		yoffset = box[1];
-		zoffset = box[2];
-		width   = box[3] - box[0];
-		height  = box[4] - box[1];
-		depth   = box[5] - box[2];
+		xoffset = box->left;
+		yoffset = box->top;
+		zoffset = box->front;
+		width   = box->right - box->left;
+		height  = box->bottom - box->top;
+		depth   = box->back - box->front;
 	}
 	else
 	{

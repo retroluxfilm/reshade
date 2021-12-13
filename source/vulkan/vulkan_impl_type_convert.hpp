@@ -10,6 +10,8 @@
 
 namespace reshade::vulkan
 {
+	static_assert(sizeof(VkViewport) == sizeof(api::viewport));
+
 	template <VkObjectType type>
 	struct object_data;
 
@@ -22,10 +24,10 @@ namespace reshade::vulkan
 #ifndef WIN64
 		uint32_t padding;
 #endif
-		VkImageCreateInfo create_info;
-		VkImageView default_view = VK_NULL_HANDLE;
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 		uint64_t memory_offset = 0;
+		VkImageCreateInfo create_info;
+		VkImageView default_view = VK_NULL_HANDLE;
 	};
 
 	template <>
@@ -37,9 +39,9 @@ namespace reshade::vulkan
 #ifndef WIN64
 		uint32_t padding;
 #endif
-		VkBufferCreateInfo create_info;
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 		uint64_t memory_offset = 0;
+		VkBufferCreateInfo create_info;
 	};
 
 	template <>
@@ -71,15 +73,8 @@ namespace reshade::vulkan
 	{
 		using Handle = VkRenderPass;
 
-		struct attachment
-		{
-			VkImageLayout initial_layout;
-			VkImageAspectFlags clear_flags;
-			VkImageAspectFlags format_flags;
-		};
-
-		std::vector<attachment> attachments;
-		VkSampleCountFlagBits samples;
+		std::vector<VkSubpassDescription> subpasses;
+		std::vector<VkAttachmentDescription> attachments;
 	};
 
 	template <>
@@ -87,9 +82,7 @@ namespace reshade::vulkan
 	{
 		using Handle = VkFramebuffer;
 
-		VkExtent2D area;
 		std::vector<VkImageView> attachments;
-		std::vector<VkImageAspectFlags> attachment_types;
 	};
 
 	template <>
@@ -98,7 +91,7 @@ namespace reshade::vulkan
 		using Handle = VkPipelineLayout;
 
 		std::vector<api::pipeline_layout_param> params;
-		uint32_t num_sets;
+		std::vector<VkDescriptorSetLayout> set_layouts;
 	};
 
 	template <>
@@ -143,7 +136,7 @@ namespace reshade::vulkan
 	void convert_buffer_usage_flags_to_usage(const VkBufferUsageFlags buffer_flags, api::resource_usage &usage);
 
 	auto convert_usage_to_access(api::resource_usage state) -> VkAccessFlags;
-	auto convert_usage_to_image_layout(api::resource_usage state) -> VkImageLayout;
+	auto convert_usage_to_image_layout(api::resource_usage state, bool src_stage) -> VkImageLayout;
 	auto convert_usage_to_pipeline_stage(api::resource_usage state, bool src_stage, const VkPhysicalDeviceFeatures &enabled_features) -> VkPipelineStageFlags;
 
 	void convert_usage_to_image_usage_flags(api::resource_usage usage, VkImageUsageFlags &image_flags);
@@ -180,12 +173,14 @@ namespace reshade::vulkan
 	auto convert_stencil_op(VkStencilOp value) -> api::stencil_op;
 	auto convert_primitive_topology(api::primitive_topology value) -> VkPrimitiveTopology;
 	auto convert_primitive_topology(VkPrimitiveTopology value) -> api::primitive_topology;
+
 	auto convert_query_type(api::query_type value) -> VkQueryType;
+
 	auto convert_descriptor_type(api::descriptor_type value, bool is_image) -> VkDescriptorType;
 	auto convert_descriptor_type(VkDescriptorType value) -> api::descriptor_type;
-	auto convert_attachment_type(api::attachment_type value) -> VkImageAspectFlags;
-	auto convert_attachment_load_op(api::attachment_load_op value) -> VkAttachmentLoadOp;
-	auto convert_attachment_load_op(VkAttachmentLoadOp value) -> api::attachment_load_op;
-	auto convert_attachment_store_op(api::attachment_store_op value) -> VkAttachmentStoreOp;
-	auto convert_attachment_store_op(VkAttachmentStoreOp value) -> api::attachment_store_op;
+
+	auto convert_render_pass_load_op(api::render_pass_load_op value) -> VkAttachmentLoadOp;
+	auto convert_render_pass_load_op(VkAttachmentLoadOp value) -> api::render_pass_load_op;
+	auto convert_render_pass_store_op(api::render_pass_store_op value) -> VkAttachmentStoreOp;
+	auto convert_render_pass_store_op(VkAttachmentStoreOp value) -> api::render_pass_store_op;
 }
