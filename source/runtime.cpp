@@ -469,7 +469,8 @@ void reshade::runtime::on_present()
 	else
 	{
 		const bool was_enabled = addon::enabled;
-		addon::enabled = traffic < 10;
+		//NOTE: disable network traffic check to not disable addons (false positives)
+		//addon::enabled = traffic < 10;
 		traffic = 0;
 		cooldown = 60;
 
