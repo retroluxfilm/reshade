@@ -331,11 +331,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 				}
 			}
 
-
-			// Register Windows Multimedia module in case it was used to load ReShade (but ignore otherwise)
-			if (_wcsicmp(g_reshade_dll_path.stem().c_str(), L"winmm") == 0)
-				reshade::hooks::register_module(get_system_path() / L"winmm.dll");
-
 			LOG(INFO) << "Initialized.";
 			break;
 		}
