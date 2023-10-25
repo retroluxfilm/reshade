@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2014 Patrick Mours. All rights reserved.
- * License: https://github.com/crosire/reshade#license
+ * Copyright (C) 2014 Patrick Mours
+ * SPDX-License-Identifier: BSD-3-Clause OR MIT
  */
 
 #include "d3d12_device.hpp"
@@ -8,7 +8,6 @@
 #include "d3d12_command_queue.hpp"
 #include "d3d12_command_queue_downlevel.hpp"
 #include "dll_log.hpp"
-#include <malloc.h>
 
 D3D12CommandQueue::D3D12CommandQueue(D3D12Device *device, ID3D12CommandQueue *original) :
 	command_queue_impl(device, original),
@@ -32,7 +31,7 @@ bool D3D12CommandQueue::check_and_upgrade_interface(REFIID riid)
 		__uuidof(ID3D12CommandQueue),
 	};
 
-	for (unsigned int version = 0; version < ARRAYSIZE(iid_lookup); ++version)
+	for (unsigned short version = 0; version < ARRAYSIZE(iid_lookup); ++version)
 	{
 		if (riid != iid_lookup[version])
 			continue;
@@ -43,7 +42,7 @@ bool D3D12CommandQueue::check_and_upgrade_interface(REFIID riid)
 			if (FAILED(_orig->QueryInterface(riid, reinterpret_cast<void **>(&new_interface))))
 				return false;
 #if RESHADE_VERBOSE_LOG
-			LOG(DEBUG) << "Upgraded ID3D12CommandQueue" << _interface_version << " object " << this << " to ID3D12CommandQueue" << version << '.';
+			LOG(DEBUG) << "Upgrading ID3D12CommandQueue" << _interface_version << " object " << this << " to ID3D12CommandQueue" << version << '.';
 #endif
 			_orig->Release();
 			_orig = static_cast<ID3D12CommandQueue *>(new_interface);
@@ -150,8 +149,11 @@ void    STDMETHODCALLTYPE D3D12CommandQueue::CopyTileMappings(ID3D12Resource *pD
 }
 void    STDMETHODCALLTYPE D3D12CommandQueue::ExecuteCommandLists(UINT NumCommandLists, ID3D12CommandList *const *ppCommandLists)
 {
-	const auto command_lists = static_cast<ID3D12CommandList **>(_malloca(NumCommandLists * sizeof(ID3D12CommandList *)));
-	for (UINT i = 0; i < NumCommandLists; i++)
+	// Synchronize access to this command queue while events are invoked and the immediate command list may be accessed
+	std::unique_lock<std::shared_mutex> lock(_mutex);
+
+	temp_mem<ID3D12CommandList *> command_lists(NumCommandLists);
+	for (UINT i = 0; i < NumCommandLists; ++i)
 	{
 		assert(ppCommandLists[i] != nullptr);
 
@@ -174,9 +176,9 @@ void    STDMETHODCALLTYPE D3D12CommandQueue::ExecuteCommandLists(UINT NumCommand
 
 	flush_immediate_command_list();
 
-	_orig->ExecuteCommandLists(NumCommandLists, command_lists);
+	lock.unlock();
 
-	_freea(command_lists);
+	_orig->ExecuteCommandLists(NumCommandLists, command_lists.p);
 }
 void    STDMETHODCALLTYPE D3D12CommandQueue::SetMarker(UINT Metadata, const void *pData, UINT Size)
 {

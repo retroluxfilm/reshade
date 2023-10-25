@@ -1,10 +1,10 @@
 /*
- * Copyright (C) 2014 Patrick Mours. All rights reserved.
- * License: https://github.com/crosire/reshade#license
+ * Copyright (C) 2014 Patrick Mours
+ * SPDX-License-Identifier: BSD-3-Clause OR MIT
  */
 
-#include "dll_log.hpp"
 #include "dxgi_device.hpp"
+#include "dll_log.hpp"
 
 DXGIDevice::DXGIDevice(IDXGIDevice1 *original) :
 	_orig(original),
@@ -21,14 +21,14 @@ bool DXGIDevice::check_and_upgrade_interface(REFIID riid)
 		return true;
 
 	static const IID iid_lookup[] = {
-		__uuidof(IDXGIDevice ),
+		__uuidof(IDXGIDevice),
 		__uuidof(IDXGIDevice1),
 		__uuidof(IDXGIDevice2),
 		__uuidof(IDXGIDevice3),
 		__uuidof(IDXGIDevice4),
 	};
 
-	for (unsigned int version = 0; version < ARRAYSIZE(iid_lookup); ++version)
+	for (unsigned short version = 0; version < ARRAYSIZE(iid_lookup); ++version)
 	{
 		if (riid != iid_lookup[version])
 			continue;
@@ -39,7 +39,7 @@ bool DXGIDevice::check_and_upgrade_interface(REFIID riid)
 			if (FAILED(_orig->QueryInterface(riid, reinterpret_cast<void **>(&new_interface))))
 				return false;
 #if RESHADE_VERBOSE_LOG
-			LOG(DEBUG) << "Upgraded IDXGIDevice" << _interface_version << " object " << this << " to IDXGIDevice" << version << '.';
+			LOG(DEBUG) << "Upgrading IDXGIDevice" << _interface_version << " object " << this << " to IDXGIDevice" << version << '.';
 #endif
 			_orig->Release();
 			_orig = static_cast<IDXGIDevice1 *>(new_interface);
