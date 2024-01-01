@@ -8,7 +8,7 @@
 #include "hook_manager.hpp"
 #include "lockfree_linear_map.hpp"
 
-extern lockfree_linear_map<void *, instance_dispatch_table, 16> g_instance_dispatch;
+extern lockfree_linear_map<void *, instance_dispatch_table, 16> g_vulkan_instances;
 extern lockfree_linear_map<void *, reshade::vulkan::device_impl *, 8> g_vulkan_devices;
 
 #define HOOK_PROC(name) \
@@ -23,13 +23,7 @@ VK_LAYER_EXPORT PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice devic
 	// The Vulkan loader gets the 'vkDestroyDevice' function from the device dispatch table
 	HOOK_PROC(DestroyDevice);
 
-	// VK_KHR_swapchain
-	HOOK_PROC(CreateSwapchainKHR);
-	HOOK_PROC(DestroySwapchainKHR);
-	HOOK_PROC(AcquireNextImageKHR);
-	HOOK_PROC(QueuePresentKHR);
-	HOOK_PROC(AcquireNextImage2KHR);
-
+	// Core 1_0
 #if RESHADE_ADDON
 	HOOK_PROC(QueueSubmit);
 	HOOK_PROC(BindBufferMemory);
@@ -173,6 +167,13 @@ VK_LAYER_EXPORT PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice devic
 	HOOK_PROC_OPTIONAL(CmdBindVertexBuffers2,);
 #endif
 
+	// VK_KHR_swapchain
+	HOOK_PROC(CreateSwapchainKHR);
+	HOOK_PROC(DestroySwapchainKHR);
+	HOOK_PROC(AcquireNextImageKHR);
+	HOOK_PROC(QueuePresentKHR);
+	HOOK_PROC(AcquireNextImage2KHR);
+
 #if RESHADE_ADDON
 	// VK_KHR_dynamic_rendering
 	HOOK_PROC_OPTIONAL(CmdBeginRendering, KHR);
@@ -267,7 +268,21 @@ VK_LAYER_EXPORT PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance i
 	if (instance == VK_NULL_HANDLE)
 		return nullptr;
 
-	const auto trampoline = g_instance_dispatch.at(dispatch_key_from_handle(instance)).GetInstanceProcAddr;
+	const auto trampoline = g_vulkan_instances.at(dispatch_key_from_handle(instance)).GetInstanceProcAddr;
 #endif
 	return trampoline(instance, pName);
+}
+
+VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *pVersionStruct)
+{
+	if (pVersionStruct == nullptr ||
+		pVersionStruct->sType != LAYER_NEGOTIATE_INTERFACE_STRUCT)
+		return VK_ERROR_INITIALIZATION_FAILED;
+
+	pVersionStruct->loaderLayerInterfaceVersion = CURRENT_LOADER_LAYER_INTERFACE_VERSION;
+	pVersionStruct->pfnGetDeviceProcAddr = vkGetDeviceProcAddr;
+	pVersionStruct->pfnGetInstanceProcAddr = vkGetInstanceProcAddr;
+	pVersionStruct->pfnGetPhysicalDeviceProcAddr = nullptr;
+
+	return VK_SUCCESS;
 }

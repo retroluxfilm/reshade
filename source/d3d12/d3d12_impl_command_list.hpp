@@ -5,8 +5,8 @@
 
 #pragma once
 
-#include "addon_manager.hpp"
 #include <d3d12.h>
+#include "reshade_api_object_impl.hpp"
 
 namespace reshade::d3d12
 {
@@ -14,11 +14,8 @@ namespace reshade::d3d12
 
 	class command_list_impl : public api::api_object_impl<ID3D12GraphicsCommandList *, api::command_list>
 	{
-		friend class swapchain_impl;
-
 	public:
 		command_list_impl(device_impl *device, ID3D12GraphicsCommandList *cmd_list);
-		~command_list_impl();
 
 		api::device *get_device() final;
 

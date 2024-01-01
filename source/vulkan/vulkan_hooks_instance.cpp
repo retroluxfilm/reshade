@@ -8,11 +8,11 @@
 #include "hook_manager.hpp"
 #include "lockfree_linear_map.hpp"
 
-lockfree_linear_map<void *, instance_dispatch_table, 16> g_instance_dispatch;
+lockfree_linear_map<void *, instance_dispatch_table, 16> g_vulkan_instances;
 lockfree_linear_map<VkSurfaceKHR, HWND, 16> g_surface_windows;
 
 #define GET_DISPATCH_PTR(name, object) \
-	PFN_vk##name trampoline = g_instance_dispatch.at(dispatch_key_from_handle(object)).name; \
+	PFN_vk##name trampoline = g_vulkan_instances.at(dispatch_key_from_handle(object)).name; \
 	assert(trampoline != nullptr)
 #define INIT_DISPATCH_PTR(name) \
 	dispatch_table.name = reinterpret_cast<PFN_vk##name>(get_instance_proc(instance, "vk" #name))
@@ -53,12 +53,26 @@ VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo, co
 	}
 #endif
 
-	if (trampoline == nullptr) // Unable to resolve next 'vkCreateInstance' function in the call chain
+	if (trampoline == nullptr || get_instance_proc == nullptr) // Unable to resolve next 'vkCreateInstance' function in the call chain
 		return VK_ERROR_INITIALIZATION_FAILED;
 
 	LOG(INFO) << "> Dumping enabled instance extensions:";
 	for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i)
 		LOG(INFO) << "  " << pCreateInfo->ppEnabledExtensionNames[i];
+
+	VkApplicationInfo app_info { VK_STRUCTURE_TYPE_APPLICATION_INFO };
+	if (pCreateInfo->pApplicationInfo != nullptr)
+		app_info = *pCreateInfo->pApplicationInfo;
+
+	LOG(INFO) << "> Requesting new Vulkan instance for API version " << VK_VERSION_MAJOR(app_info.apiVersion) << '.' << VK_VERSION_MINOR(app_info.apiVersion) << '.';
+
+	// ReShade requires at least Vulkan 1.1 (for SPIR-V 1.3 compatibility)
+	if (app_info.apiVersion < VK_API_VERSION_1_1)
+	{
+		LOG(INFO) << "> Replacing requested version with 1.1.";
+
+		app_info.apiVersion = VK_API_VERSION_1_1;
+	}
 
 	// 'vkEnumerateInstanceExtensionProperties' is not included in the next 'vkGetInstanceProcAddr' from the call chain, so use global one instead
 	auto enum_instance_extensions = reinterpret_cast<PFN_vkEnumerateInstanceExtensionProperties>(
@@ -103,20 +117,6 @@ VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo, co
 		add_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, false);
 	}
 
-	VkApplicationInfo app_info { VK_STRUCTURE_TYPE_APPLICATION_INFO };
-	if (pCreateInfo->pApplicationInfo != nullptr)
-		app_info = *pCreateInfo->pApplicationInfo;
-
-	LOG(INFO) << "> Requesting new Vulkan instance for API version " << VK_VERSION_MAJOR(app_info.apiVersion) << '.' << VK_VERSION_MINOR(app_info.apiVersion) << ".";
-
-	// ReShade requires at least Vulkan 1.1 (for SPIR-V 1.3 compatibility)
-	if (app_info.apiVersion < VK_API_VERSION_1_1)
-	{
-		LOG(INFO) << "> Replacing requested version with 1.1.";
-
-		app_info.apiVersion = VK_API_VERSION_1_1;
-	}
-
 	VkInstanceCreateInfo create_info = *pCreateInfo;
 	create_info.pApplicationInfo = &app_info;
 	create_info.enabledExtensionCount = uint32_t(enabled_extensions.size());
@@ -133,9 +133,10 @@ VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo, co
 	VkInstance instance = *pInstance;
 	// Initialize the instance dispatch table
 	VkLayerInstanceDispatchTable dispatch_table = {};
+	dispatch_table.GetInstanceProcAddr = get_instance_proc;
 	dispatch_table.GetPhysicalDeviceProcAddr = get_physical_device_proc;
 
-	#pragma region Core 1_0
+	// Core 1_0
 	INIT_DISPATCH_PTR(DestroyInstance);
 	INIT_DISPATCH_PTR(EnumeratePhysicalDevices);
 	INIT_DISPATCH_PTR(GetPhysicalDeviceFeatures);
@@ -143,25 +144,26 @@ VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo, co
 	INIT_DISPATCH_PTR(GetPhysicalDeviceProperties);
 	INIT_DISPATCH_PTR(GetPhysicalDeviceMemoryProperties);
 	INIT_DISPATCH_PTR(GetPhysicalDeviceQueueFamilyProperties);
-	dispatch_table.GetInstanceProcAddr = get_instance_proc;
 	INIT_DISPATCH_PTR(EnumerateDeviceExtensionProperties);
-	#pragma endregion
-	#pragma region Core 1_1
+
+	// Core 1_1
+	INIT_DISPATCH_PTR(GetPhysicalDeviceProperties2);
 	INIT_DISPATCH_PTR(GetPhysicalDeviceMemoryProperties2);
-	#pragma endregion
-	#pragma region VK_KHR_surface
+	INIT_DISPATCH_PTR(GetPhysicalDeviceExternalBufferProperties);
+	INIT_DISPATCH_PTR(GetPhysicalDeviceExternalSemaphoreProperties);
+
+	// VK_KHR_surface
 	INIT_DISPATCH_PTR(DestroySurfaceKHR);
-	#pragma endregion
-	#pragma region VK_KHR_win32_surface
+
+	// VK_KHR_win32_surface
 	INIT_DISPATCH_PTR(CreateWin32SurfaceKHR);
-	#pragma endregion
-	#pragma region VK_EXT_tooling_info
+
+	// VK_EXT_tooling_info
 #ifdef VK_EXT_tooling_info
 	INIT_DISPATCH_PTR(GetPhysicalDeviceToolPropertiesEXT);
 #endif
-	#pragma endregion
 
-	g_instance_dispatch.emplace(dispatch_key_from_handle(instance), instance_dispatch_table { dispatch_table, instance, app_info.apiVersion });
+	g_vulkan_instances.emplace(dispatch_key_from_handle(instance), instance_dispatch_table { dispatch_table, instance, app_info.apiVersion });
 
 #if RESHADE_VERBOSE_LOG
 	LOG(DEBUG) << "Returning Vulkan instance " << instance << '.';
@@ -177,7 +179,7 @@ void     VKAPI_CALL vkDestroyInstance(VkInstance instance, const VkAllocationCal
 	GET_DISPATCH_PTR(DestroyInstance, instance);
 
 	// Remove instance dispatch table since this instance is being destroyed
-	g_instance_dispatch.erase(dispatch_key_from_handle(instance));
+	g_vulkan_instances.erase(dispatch_key_from_handle(instance));
 
 	trampoline(instance, pAllocator);
 }

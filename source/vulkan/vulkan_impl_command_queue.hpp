@@ -22,7 +22,7 @@ namespace reshade::vulkan
 		void wait_idle() const final;
 
 		void flush_immediate_command_list() const final;
-		void flush_immediate_command_list(VkSemaphore *wait_semaphores, uint32_t &num_wait_semaphores) const;
+		void flush_immediate_command_list(VkSubmitInfo &semaphore_info) const;
 
 		api::command_list *get_immediate_command_list() final { return _immediate_cmd_list; }
 
@@ -30,10 +30,15 @@ namespace reshade::vulkan
 		void end_debug_event() final;
 		void insert_debug_marker(const char *label, const float color[4]) final;
 
+		bool wait(api::fence fence, uint64_t value) final;
+		bool signal(api::fence fence, uint64_t value) final;
+
+		uint64_t get_timestamp_frequency() const final;
+
 	private:
 		device_impl *const _device_impl;
 		command_list_immediate_impl *_immediate_cmd_list = nullptr;
-		const VkQueueFlags _queue_flags;
+		VkQueueFamilyProperties _queue_family_props = {};
 	};
 
 	template <>

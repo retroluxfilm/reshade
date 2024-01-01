@@ -14,6 +14,7 @@
 #include "dll_log.hpp" // Include late to get HRESULT log overloads
 #include "com_utils.hpp"
 #include "hook_manager.hpp"
+#include "addon_manager.hpp"
 
 using reshade::d3d12::to_handle;
 
@@ -27,6 +28,23 @@ D3D12Device::D3D12Device(ID3D12Device *original) :
 	// Add proxy object to the private data of the device, so that it can be retrieved again when only the original device is available
 	D3D12Device *const device_proxy = this;
 	_orig->SetPrivateData(__uuidof(D3D12Device), sizeof(device_proxy), &device_proxy);
+
+#if RESHADE_ADDON
+	reshade::load_addons();
+
+	reshade::invoke_addon_event<reshade::addon_event::init_device>(this);
+#endif
+}
+D3D12Device::~D3D12Device()
+{
+#if RESHADE_ADDON
+	reshade::invoke_addon_event<reshade::addon_event::destroy_device>(this);
+
+	reshade::unload_addons();
+#endif
+
+	// Remove pointer to this proxy object from the private data of the device (in case the device unexpectedly survives)
+	_orig->SetPrivateData(__uuidof(D3D12Device), 0, nullptr);
 }
 
 bool D3D12Device::check_and_upgrade_interface(REFIID riid)
@@ -36,7 +54,7 @@ bool D3D12Device::check_and_upgrade_interface(REFIID riid)
 		riid == __uuidof(ID3D12Object))
 		return true;
 
-	static const IID iid_lookup[] = {
+	static constexpr IID iid_lookup[] = {
 		__uuidof(ID3D12Device),
 		__uuidof(ID3D12Device1),
 		__uuidof(ID3D12Device2),
@@ -129,9 +147,6 @@ ULONG   STDMETHODCALLTYPE D3D12Device::Release()
 		_downlevel->_orig->Release();
 		delete _downlevel;
 	}
-
-	// Remove pointer to this proxy object from the private data of the device (in case the device unexpectedly survives)
-	_orig->SetPrivateData(__uuidof(D3D12Device), 0, nullptr);
 
 	const auto orig = _orig;
 	const auto interface_version = _interface_version;
@@ -1518,7 +1533,7 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreatePipelineState(const D3D12_PIPELINE_
 
 	reshade::api::pipeline_layout layout = {};
 
-	reshade::api::shader_desc vs_desc, ps_desc, ds_desc, hs_desc, gs_desc, cs_desc;
+	reshade::api::shader_desc vs_desc, ps_desc, ds_desc, hs_desc, gs_desc, cs_desc, as_desc, ms_desc;
 	reshade::api::stream_output_desc stream_output_desc;
 	reshade::api::blend_desc blend_desc;
 	reshade::api::rasterizer_desc rasterizer_desc;
@@ -1656,11 +1671,13 @@ HRESULT STDMETHODCALLTYPE D3D12Device::CreatePipelineState(const D3D12_PIPELINE_
 			p += sizeof(D3D12_PIPELINE_STATE_STREAM_VIEW_INSTANCING);
 			continue;
 		case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
-			assert(false); // Not implemented
+			as_desc = reshade::d3d12::convert_shader_desc(reinterpret_cast<const D3D12_PIPELINE_STATE_STREAM_AS *>(p)->data);
+			subobjects.push_back({ reshade::api::pipeline_subobject_type::amplification_shader, 1, &as_desc });
 			p += sizeof(D3D12_PIPELINE_STATE_STREAM_AS);
 			continue;
 		case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS:
-			assert(false); // Not implemented
+			ms_desc = reshade::d3d12::convert_shader_desc(reinterpret_cast<const D3D12_PIPELINE_STATE_STREAM_MS *>(p)->data);
+			subobjects.push_back({ reshade::api::pipeline_subobject_type::mesh_shader, 1, &ms_desc });
 			p += sizeof(D3D12_PIPELINE_STATE_STREAM_MS);
 			continue;
 		case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2:

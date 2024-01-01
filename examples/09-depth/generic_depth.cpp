@@ -786,6 +786,9 @@ static void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_l
 	auto &data = runtime->get_private_data<generic_depth_data>();
 	auto &device_data = device->get_private_data<generic_depth_device_data>();
 
+	if (std::addressof(device_data) == nullptr)
+		return;
+
 	resource best_match = { 0 };
 	resource_desc best_match_desc;
 	const depth_stencil_frame_stats *best_snapshot = nullptr;
@@ -800,7 +803,7 @@ static void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_l
 
 	for (auto &[resource, info] : current_depth_stencil_resources)
 	{
-		if (info.last_counters.total_stats.drawcalls == 0)
+		if (info.last_counters.total_stats.drawcalls == 0 || info.last_counters.total_stats.vertices <= 3)
 			continue; // Skip unused
 
 		if (info.last_used_in_frame < device_data.frame_index || device_data.frame_index <= (info.first_used_in_frame + 1))
@@ -1071,7 +1074,7 @@ static void draw_settings_overlay(effect_runtime *runtime)
 
 	std::shared_lock<std::shared_mutex> lock(s_mutex);
 
-	if (device_data.depth_stencil_resources.empty())
+	if (std::addressof(device_data) == nullptr || device_data.depth_stencil_resources.empty())
 	{
 		ImGui::TextUnformatted("No depth buffers found.");
 		return;

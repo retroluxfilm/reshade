@@ -3,10 +3,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "reshade_api_pipeline.hpp"
-#include <vector>
-#include <limits>
 #include "opengl_impl_type_convert.hpp"
+#include <limits>
 #include <cassert>
 
 auto reshade::opengl::convert_format(api::format format, GLint swizzle_mask[4]) -> GLenum
@@ -129,11 +127,11 @@ auto reshade::opengl::convert_format(api::format format, GLint swizzle_mask[4]) 
 		return GL_R16UI;
 	case api::format::r16_sint:
 		return GL_R16I;
-	case api::format::r16_typeless:
 	case api::format::r16_unorm:
 		return GL_R16;
 	case api::format::r16_snorm:
 		return GL_R16_SNORM;
+	case api::format::r16_typeless:
 	case api::format::r16_float:
 		return GL_R16F;
 	case api::format::l16a16_unorm:
@@ -154,22 +152,22 @@ auto reshade::opengl::convert_format(api::format format, GLint swizzle_mask[4]) 
 		return GL_RG16UI;
 	case api::format::r16g16_sint:
 		return GL_RG16I;
-	case api::format::r16g16_typeless:
 	case api::format::r16g16_unorm:
 		return GL_RG16;
 	case api::format::r16g16_snorm:
 		return GL_RG16_SNORM;
+	case api::format::r16g16_typeless:
 	case api::format::r16g16_float:
 		return GL_RG16F;
 	case api::format::r16g16b16a16_uint:
 		return GL_RGBA16UI;
 	case api::format::r16g16b16a16_sint:
 		return GL_RGBA16I;
-	case api::format::r16g16b16a16_typeless:
 	case api::format::r16g16b16a16_unorm:
 		return GL_RGBA16;
 	case api::format::r16g16b16a16_snorm:
 		return GL_RGBA16_SNORM;
+	case api::format::r16g16b16a16_typeless:
 	case api::format::r16g16b16a16_float:
 		return GL_RGBA16F;
 #if 0

@@ -1,5 +1,7 @@
 // Microsoft Visual C++ generated resource script.
 //
+#pragma code_page(65001)
+
 #include "resource.h"
 
 #define APSTUDIO_READONLY_SYMBOLS
@@ -17,7 +19,6 @@
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEUD)
 LANGUAGE LANG_NEUTRAL, SUBLANG_DEFAULT
-#pragma code_page(65001)
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -93,6 +94,10 @@ IDR_LICENSE_IMGUI       RCDATA                  "..\\deps\\imgui\\LICENSE.txt"
 
 IDR_LICENSE_MINHOOK     RCDATA                  "..\\deps\\minhook\\LICENSE.txt"
 
+IDR_LICENSE_OPENVR      RCDATA                  "..\\deps\\openvr\\LICENSE"
+
+IDR_LICENSE_OPENXR      RCDATA                  "..\\deps\\openxr\\LICENSE"
+
 IDR_LICENSE_RESHADE     RCDATA                  "..\\LICENSE.md"
 
 IDR_LICENSE_SPIRV       RCDATA                  "..\\deps\\spirv\\LICENSE"
@@ -117,6 +122,14 @@ IDR_LICENSE_VULKAN      RCDATA                  "..\\deps\\vulkan\\LICENSE.txt"
 // Generated from the TEXTINCLUDE 3 resource.
 //
 #include "version.rc2"
+#if defined(RESHADE_LOCALIZATION)
+#include "lang_bg-BG.rc2"
+#include "lang_de-DE.rc2"
+#include "lang_en-US.rc2"
+#include "lang_fr-FR.rc2"
+#include "lang_ja-JP.rc2"
+#include "lang_zh-CN.rc2"
+#endif
 
 /////////////////////////////////////////////////////////////////////////////
 #endif    // not APSTUDIO_INVOKED

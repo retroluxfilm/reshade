@@ -287,11 +287,11 @@ private:
 
 			s += "{ ";
 
-			for (int i = 0; i < type.array_length; ++i)
+			for (unsigned int a = 0; a < type.array_length; ++a)
 			{
-				write_constant(s, elem_type, i < static_cast<int>(data.array_data.size()) ? data.array_data[i] : constant());
+				write_constant(s, elem_type, a < static_cast<unsigned int>(data.array_data.size()) ? data.array_data[a] : constant {});
 
-				if (i < type.array_length - 1)
+				if (a < type.array_length - 1)
 					s += ", ";
 			}
 
@@ -466,7 +466,7 @@ private:
 				digit_index--;
 			digit_index++;
 
-			const uint32_t semantic_digit = std::strtoul(semantic.c_str() + digit_index, nullptr, 10);
+			const uint32_t semantic_digit = static_cast<uint32_t>(std::strtoul(semantic.c_str() + digit_index, nullptr, 10));
 			const std::string semantic_base = semantic.substr(0, digit_index);
 
 			if (semantic_base == "TEXCOORD")
@@ -560,7 +560,7 @@ private:
 				code += '[' + std::to_string(member.type.array_length) + ']';
 
 			if (!member.semantic.empty())
-				code += " : " + convert_semantic(member.semantic, std::max(1, static_cast<int>(member.type.components() / 4)) * std::max(1, member.type.array_length));
+				code += " : " + convert_semantic(member.semantic, std::max(1u, member.type.components() / 4) * std::max(1u, member.type.array_length));
 
 			code += ";\n";
 		}
@@ -849,7 +849,7 @@ private:
 				code += '[' + std::to_string(param.type.array_length) + ']';
 
 			if (!param.semantic.empty())
-				code += " : " + convert_semantic(param.semantic, std::max(1, static_cast<int>(param.type.cols / 4)) * std::max(1, param.type.array_length));
+				code += " : " + convert_semantic(param.semantic, std::max(1u, param.type.cols / 4) * std::max(1u, param.type.array_length));
 
 			if (i < num_params - 1)
 				code += ',';

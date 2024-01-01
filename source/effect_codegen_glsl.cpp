@@ -308,11 +308,11 @@ private:
 			write_type<false, false>(s, elem_type);
 			s += '[' + std::to_string(type.array_length) + "](";
 
-			for (int i = 0; i < type.array_length; ++i)
+			for (unsigned int a = 0; a < type.array_length; ++a)
 			{
-				write_constant(s, elem_type, i < static_cast<int>(data.array_data.size()) ? data.array_data[i] : constant());
+				write_constant(s, elem_type, a < static_cast<unsigned int>(data.array_data.size()) ? data.array_data[a] : constant {});
 
-				if (i < type.array_length - 1)
+				if (a < type.array_length - 1)
 					s += ", ";
 			}
 
@@ -458,9 +458,9 @@ private:
 	uint32_t semantic_to_location(const std::string &semantic, uint32_t max_attributes = 1)
 	{
 		if (semantic.compare(0, 5, "COLOR") == 0)
-			return std::strtoul(semantic.c_str() + 5, nullptr, 10);
+			return static_cast<uint32_t>(std::strtoul(semantic.c_str() + 5, nullptr, 10));
 		if (semantic.compare(0, 9, "SV_TARGET") == 0)
-			return std::strtoul(semantic.c_str() + 9, nullptr, 10);
+			return static_cast<uint32_t>(std::strtoul(semantic.c_str() + 9, nullptr, 10));
 
 		if (const auto it = _semantic_to_location.find(semantic);
 			it != _semantic_to_location.end())
@@ -472,7 +472,7 @@ private:
 			digit_index--;
 		digit_index++;
 
-		const uint32_t semantic_digit = std::strtoul(semantic.c_str() + digit_index, nullptr, 10);
+		const uint32_t semantic_digit = static_cast<uint32_t>(std::strtoul(semantic.c_str() + digit_index, nullptr, 10));
 		const std::string semantic_base = semantic.substr(0, digit_index);
 
 		uint32_t location = static_cast<uint32_t>(_semantic_to_location.size());
@@ -687,7 +687,7 @@ private:
 			//    according to rules (1), (2), and (3), and rounded up to the base alignment of a four-component vector.
 			// 7. If the member is a row-major matrix with C columns and R rows, the matrix is stored identically to an array of R row vectors with C components each, according to rule (4).
 			// 8. If the member is an array of S row-major matrices with C columns and R rows, the matrix is stored identically to a row of S*R row vectors with C components each, according to rule (4).
-			uint32_t alignment = (info.type.rows == 3 ? 4 /* (3) */ : info.type.rows /* (2)*/) * 4 /* (1)*/;
+			uint32_t alignment = (info.type.rows == 3 ? 4 /* (3) */ : info.type.rows /* (2) */) * 4 /* (1) */;
 			info.size = info.type.rows * 4;
 
 			if (info.type.is_matrix())
@@ -856,9 +856,9 @@ private:
 
 			std::string &code = _blocks.at(_current_block);
 
-			const uint32_t location = semantic_to_location(semantic, std::max(1, type.array_length));
+			const uint32_t location = semantic_to_location(semantic, std::max(1u, type.array_length));
 
-			for (int a = 0; a < std::max(1, type.array_length); ++a)
+			for (unsigned int a = 0; a < std::max(1u, type.array_length); ++a)
 			{
 				code += "layout(location = " + std::to_string(location + a) + ") ";
 				write_type<false, false, true>(code, type);
@@ -897,7 +897,7 @@ private:
 				{
 					const struct_info &definition = get_struct(param_type.definition);
 
-					for (int a = 0, array_length = std::max(1, param_type.array_length); a < array_length; a++)
+					for (unsigned int a = 0, array_length = std::max(1u, param_type.array_length); a < array_length; a++)
 						for (const struct_member_info &member : definition.member_list)
 							create_varying_variable(member.type, param_type.qualifiers | type::q_in, "_in_param" + std::to_string(i) + '_' + std::to_string(a) + '_' + member.name, member.semantic);
 				}
@@ -913,7 +913,7 @@ private:
 				{
 					const struct_info &definition = get_struct(param_type.definition);
 
-					for (int a = 0, array_length = std::max(1, param_type.array_length); a < array_length; a++)
+					for (unsigned int a = 0, array_length = std::max(1u, param_type.array_length); a < array_length; a++)
 						for (const struct_member_info &member : definition.member_list)
 							create_varying_variable(member.type, param_type.qualifiers | type::q_out, "_out_param" + std::to_string(i) + '_' + std::to_string(a) + '_' + member.name, member.semantic);
 				}
@@ -938,7 +938,7 @@ private:
 			if (param_type.has(type::q_in))
 			{
 				// Create local array element variables
-				for (int a = 0, array_length = std::max(1, param_type.array_length); a < array_length; a++)
+				for (unsigned int a = 0, array_length = std::max(1u, param_type.array_length); a < array_length; a++)
 				{
 					if (param_type.is_struct())
 					{
@@ -967,7 +967,7 @@ private:
 								write_type<false, false>(code, member.type);
 								code += "[](";
 
-								for (int b = 0; b < member.type.array_length; b++)
+								for (unsigned int b = 0; b < member.type.array_length; b++)
 								{
 									// OpenGL does not allow varying of type boolean, so need to cast here
 									if (member.type.is_boolean())
@@ -1060,7 +1060,7 @@ private:
 					write_type<false, false>(code, param_type);
 					code += "[](";
 
-					for (int a = 0; a < param_type.array_length; ++a)
+					for (unsigned int a = 0; a < param_type.array_length; ++a)
 					{
 						// OpenGL does not allow varying of type boolean, so need to cast here
 						if (param_type.is_boolean())
@@ -1137,13 +1137,13 @@ private:
 				const struct_info &definition = get_struct(param_type.definition);
 
 				// Split out struct fields into separate output variables again
-				for (int a = 0, array_length = std::max(1, param_type.array_length); a < array_length; a++)
+				for (unsigned int a = 0, array_length = std::max(1u, param_type.array_length); a < array_length; a++)
 				{
 					for (const struct_member_info &member : definition.member_list)
 					{
 						if (member.type.is_array())
 						{
-							for (int b = 0; b < member.type.array_length; b++)
+							for (unsigned int b = 0; b < member.type.array_length; b++)
 							{
 								code += '\t';
 								code += escape_name("_out_param" + std::to_string(i) + '_' + std::to_string(a) + '_' + member.name + '_' + std::to_string(b));
@@ -1204,7 +1204,7 @@ private:
 				if (param_type.is_array())
 				{
 					// Split up array output into individual array elements again
-					for (int a = 0; a < param_type.array_length; a++)
+					for (unsigned int a = 0; a < param_type.array_length; a++)
 					{
 						code += '\t';
 						code += escape_name("_out_param" + std::to_string(i) + '_' + std::to_string(a));

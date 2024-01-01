@@ -12,7 +12,7 @@ namespace reshade
 	enum class addon_event : uint32_t
 	{
 		/// <summary>
-		/// Called after successfull device creation, from:
+		/// Called after successful device creation, from:
 		/// <list type="bullet">
 		/// <item><description>IDirect3D9::CreateDevice</description></item>
 		/// <item><description>IDirect3D9Ex::CreateDeviceEx</description></item>
@@ -49,7 +49,7 @@ namespace reshade
 		destroy_device,
 
 		/// <summary>
-		/// Called after successfull command list creation, from:
+		/// Called after successful command list creation, from:
 		/// <list type="bullet">
 		/// <item><description>ID3D11Device::CreateDeferredContext</description></item>
 		/// <item><description>ID3D11Device1::CreateDeferredContext1</description></item>
@@ -78,7 +78,7 @@ namespace reshade
 		destroy_command_list,
 
 		/// <summary>
-		/// Called after successfull command queue creation, from:
+		/// Called after successful command queue creation, from:
 		/// <list type="bullet">
 		/// <item><description>ID3D12Device::CreateCommandQueue</description></item>
 		/// <item><description>vkCreateDevice (for every queue associated with the device)</description></item>
@@ -101,7 +101,7 @@ namespace reshade
 		destroy_command_queue,
 
 		/// <summary>
-		/// Called after successfull swap chain creation, from:
+		/// Called after successful swap chain creation, from:
 		/// <list type="bullet">
 		/// <item><description>IDirect3D9::CreateDevice (for the implicit swap chain)</description></item>
 		/// <item><description>IDirect3D9Ex::CreateDeviceEx (for the implicit swap chain)</description></item>
@@ -115,6 +115,7 @@ namespace reshade
 		/// <item><description>wglMakeCurrent</description></item>
 		/// <item><description>wglSwapBuffers (after window was resized)</description></item>
 		/// <item><description>vkCreateSwapchainKHR</description></item>
+		/// <item><description>xrCreateSession</description></item>
 		/// </list>
 		/// <para>Callback function signature: <c>void (api::swapchain *swapchain)</c></para>
 		/// </summary>
@@ -151,6 +152,7 @@ namespace reshade
 		/// <item><description>wglDeleteContext</description></item>
 		/// <item><description>wglSwapBuffers (after window was resized)</description></item>
 		/// <item><description>vkDestroySwapchainKHR</description></item>
+		/// <item><description>xrDestroySession</description></item>
 		/// </list>
 		/// In addition, called when swap chain is reset, before:
 		/// <list type="bullet">
@@ -176,7 +178,7 @@ namespace reshade
 		destroy_effect_runtime,
 
 		/// <summary>
-		/// Called after successfull sampler creation from:
+		/// Called after successful sampler creation from:
 		/// <list type="bullet">
 		/// <item><description>ID3D10Device::CreateSamplerState</description></item>
 		/// <item><description>ID3D11Device::CreateSamplerState</description></item>
@@ -223,7 +225,7 @@ namespace reshade
 		destroy_sampler,
 
 		/// <summary>
-		/// Called after successfull resource creation from:
+		/// Called after successful resource creation from:
 		/// <list type="bullet">
 		/// <item><description>IDirect3DDevice9::CreateVertexBuffer</description></item>
 		/// <item><description>IDirect3DDevice9::CreateIndexBuffer</description></item>
@@ -369,7 +371,7 @@ namespace reshade
 		destroy_resource,
 
 		/// <summary>
-		/// Called after successfull resource view creation from:
+		/// Called after successful resource view creation from:
 		/// <list type="bullet">
 		/// <item><description>IDirect3DDevice9::CreateTexture</description></item>
 		/// <item><description>IDirect3DDevice9::CreateCubeTexture</description></item>
@@ -555,7 +557,7 @@ namespace reshade
 		update_texture_region,
 
 		/// <summary>
-		/// Called after successfull pipeline creation from:
+		/// Called after successful pipeline creation from:
 		/// <list type="bullet">
 		/// <item><description>IDirect3DDevice9::CreateVertexShader</description></item>
 		/// <item><description>IDirect3DDevice9::CreatePixelShader</description></item>
@@ -675,7 +677,7 @@ namespace reshade
 		destroy_pipeline,
 
 		/// <summary>
-		/// Called after successfull pipeline layout creation from:
+		/// Called after successful pipeline layout creation from:
 		/// <list type="bullet">
 		/// <item><description>ID3D12Device::CreateRootSignature</description></item>
 		/// <item><description>vkCreatePipelineLayout</description></item>
@@ -731,7 +733,7 @@ namespace reshade
 		update_descriptor_tables,
 
 		/// <summary>
-		/// Called after successfull query heap creation from:
+		/// Called after successful query heap creation from:
 		/// <list type="bullet">
 		/// <item><description>ID3D12Device::CreateQueryHeap</description></item>
 		/// <item><description>vkCreateQueryPool</description></item>
@@ -1474,6 +1476,7 @@ namespace reshade
 		/// <item><description>wglSwapBuffers</description></item>
 		/// <item><description>vkQueuePresentKHR</description></item>
 		/// <item><description>IVRCompositor::Submit</description></item>
+		/// <item><description>xrEndFrame</description></item>
 		/// </list>
 		/// <para>Callback function signature: <c>void (api::command_queue *queue, api::swapchain *swapchain, const api::rect *source_rect, const api::rect *dest_rect, uint32_t dirty_rect_count, const api::rect *dirty_rects)</c></para>
 		/// </summary>
@@ -1563,6 +1566,35 @@ namespace reshade
 		/// To prevent the order from being changed, return <see langword="true"/>, otherwise return <see langword="false"/>.
 		/// </remarks>
 		reshade_reorder_techniques,
+
+		/// <summary>
+		/// Called when the ReShade overlay is about to be opened or closed.
+		/// <para>Callback function signature: <c>bool (api::effect_runtime *runtime, bool open, api::input_source source)</c></para>
+		/// </summary>
+		/// <remarks>
+		/// To prevent the overlay state from being changed, return <see langword="true"/>, otherwise return <see langword="false"/>.
+		/// </remarks>
+		reshade_open_overlay,
+
+		/// <summary>
+		/// Called when a uniform variable widget is added to the variable list in the overlay.
+		/// Can be used to replace with custom one or add widgets for specific uniform variables.
+		/// <para>Callback function signature: <c>bool (api::effect_runtime *runtime, api::effect_uniform_variable variable)</c></para>
+		/// </summary>
+		/// <remarks>
+		/// To prevent the normal widget from being added to the overlay, return <see langword="true"/>, otherwise return <see langword="false"/>.
+		/// </remarks>
+		reshade_overlay_uniform_variable,
+
+		/// <summary>
+		/// Called when a technique is added to the technique list in the overlay.
+		/// Can be used to replace with custom one or add widgets for specific techniques.
+		/// <para>Callback function signature: <c>bool (api::effect_runtime *runtime, api::effect_technique technique)</c></para>
+		/// </summary>
+		/// <remarks>
+		/// To prevent the normal widget from being added to the overlay, return <see langword="true"/>, otherwise return <see langword="false"/>.
+		/// </remarks>
+		reshade_overlay_technique,
 
 #if RESHADE_ADDON
 		max // Last value used internally by ReShade to determine number of events in this enum
@@ -1695,4 +1727,9 @@ namespace reshade
 
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_set_current_preset_path, void, api::effect_runtime *runtime, const char *path);
 	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_reorder_techniques, bool, api::effect_runtime *runtime, size_t count, api::effect_technique *techniques);
+
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_open_overlay, bool, api::effect_runtime *runtime, bool open, api::input_source source);
+
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_overlay_uniform_variable, bool, api::effect_runtime *runtime, api::effect_uniform_variable variable);
+	RESHADE_DEFINE_ADDON_EVENT_TRAITS(addon_event::reshade_overlay_technique, bool, api::effect_runtime *runtime, api::effect_technique technique);
 }

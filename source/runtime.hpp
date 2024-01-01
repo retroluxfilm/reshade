@@ -6,17 +6,13 @@
 #pragma once
 
 #include "reshade_api.hpp"
-#if RESHADE_GUI
+#include "state_block.hpp"
 #include "imgui_code_editor.hpp"
-#endif
 #include <chrono>
 #include <memory>
 #include <filesystem>
 #include <atomic>
 #include <shared_mutex>
-#include <string>
-#include <vector>
-#include <unordered_map>
 
 class ini_file;
 
@@ -30,23 +26,30 @@ namespace reshade
 	/// <summary>
 	/// The main ReShade post-processing effect runtime.
 	/// </summary>
-	class __declspec(novtable) runtime : public api::effect_runtime
+	class __declspec(uuid("77FF8202-5BEC-42AD-8CE0-397F3E84EAA6")) runtime : public api::effect_runtime
 	{
 	public:
-		/// <summary>
-		/// Gets the handle of the window the swap chain associated with this effect runtime was created with.
-		/// </summary>
-		void *get_hwnd() const override;
+		runtime(api::swapchain *swapchain, api::command_queue *graphics_queue, const std::filesystem::path &config_path, bool is_vr);
+		~runtime();
 
-		/// <summary>
-		/// Gets the parent device for this effect runtime.
-		/// </summary>
+		bool on_init();
+		void on_reset();
+		void on_present(api::command_queue *present_queue);
+
+		uint64_t get_native() const final { return _swapchain->get_native(); }
+
+		void get_private_data(const uint8_t guid[16], uint64_t *data) const final { return _swapchain->get_private_data(guid, data); }
+		void set_private_data(const uint8_t guid[16], const uint64_t data)  final { return _swapchain->set_private_data(guid, data); }
+
 		api::device *get_device() final { return _device; }
-
-		/// <summary>
-		/// Gets the main graphics command queue associated with this effect runtime.
-		/// </summary>
+		api::swapchain *get_swapchain() { return _swapchain; }
 		api::command_queue *get_command_queue() final { return _graphics_queue; }
+
+		void *get_hwnd() const final { return _swapchain->get_hwnd(); }
+
+		api::resource get_back_buffer(uint32_t index) final { return _swapchain->get_back_buffer(index); }
+		uint32_t get_back_buffer_count() const final { return _swapchain->get_back_buffer_count(); }
+		uint32_t get_current_back_buffer_index() const final { return _swapchain->get_current_back_buffer_index(); }
 
 		/// <summary>
 		/// Gets the path to the configuration file used by this effect runtime.
@@ -59,26 +62,15 @@ namespace reshade
 		/// </summary>
 		bool is_loading() const { return _reload_remaining_effects != std::numeric_limits<size_t>::max() || !_reload_create_queue.empty() || (!_textures_loaded && _is_initialized); }
 #endif
-		/// <summary>
-		/// Gets a boolean indicating whether the runtime is initialized.
-		/// </summary>
-		bool is_initialized() const { return _is_initialized; }
 
-#if RESHADE_FX
-		virtual void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) override;
-		virtual void render_technique(api::effect_technique handle, api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) override;
-#else
-		virtual void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) final { cmd_list; rtv; rtv_srgb; }
-		virtual void render_technique(api::effect_technique handle, api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) final { handle; cmd_list; rtv; rtv_srgb; }
-
-		void save_current_preset() const final {}
-#endif
+		void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) final;
+		void render_technique(api::effect_technique handle, api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) final;
 
 		/// <summary>
 		/// Captures a screenshot of the current back buffer resource and writes it to an image file on disk.
 		/// </summary>
-		void save_screenshot(const std::string_view &postfix = std::string_view());
-		bool capture_screenshot(uint8_t *pixels) final { return get_texture_data(_back_buffer_resolved != 0 ? _back_buffer_resolved : get_current_back_buffer(), _back_buffer_resolved != 0 ? api::resource_usage::render_target : api::resource_usage::present, pixels); }
+		void save_screenshot(const std::string_view postfix = std::string_view());
+		bool capture_screenshot(void *pixels) final { return get_texture_data(_back_buffer_resolved != 0 ? _back_buffer_resolved : _swapchain->get_current_back_buffer(), _back_buffer_resolved != 0 ? api::resource_usage::render_target : api::resource_usage::present, static_cast<uint8_t *>(pixels)); }
 
 		void get_screenshot_width_and_height(uint32_t *out_width, uint32_t *out_height) const final { *out_width = _width; *out_height = _height; }
 
@@ -134,7 +126,7 @@ namespace reshade
 		bool get_annotation_uint_from_texture_variable(api::effect_texture_variable variable, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_string_from_texture_variable(api::effect_texture_variable variable, const char *name, char *value, size_t *value_size) const final;
 
-		void update_texture(api::effect_texture_variable variable, const uint32_t width, const uint32_t height, const uint8_t *pixels) final;
+		void update_texture(api::effect_texture_variable variable, const uint32_t width, const uint32_t height, const void *pixels) final;
 
 		void get_texture_binding(api::effect_texture_variable variable, api::resource_view *out_srv, api::resource_view *out_srv_srgb) const final;
 
@@ -169,30 +161,9 @@ namespace reshade
 
 		void reorder_techniques(size_t count, const api::effect_technique *techniques) final;
 
-	protected:
-		runtime(api::device *device, api::command_queue *graphics_queue);
-		~runtime();
+		bool open_overlay(bool open, api::input_source source) final;
 
-		bool on_init(void *window);
-		void on_reset();
-		void on_present();
-
-		api::device *const _device;
-		api::command_queue *const _graphics_queue;
-		unsigned int _width = 0;
-		unsigned int _height = 0;
-		unsigned int _vendor_id = 0;
-		unsigned int _device_id = 0;
-		unsigned int _renderer_id = 0;
-		uint16_t _back_buffer_samples = 1;
-		api::format  _back_buffer_format = api::format::unknown;
-		api::color_space _back_buffer_color_space = api::color_space::srgb_nonlinear;
-		bool _is_vr = false;
-
-#if RESHADE_ADDON
-		bool _is_in_api_call = false;
-		bool _is_in_present_call = false;
-#endif
+		void set_color_space(api::color_space color_space) final { _back_buffer_color_space = color_space; }
 
 	private:
 		static void check_for_update();
@@ -206,7 +177,7 @@ namespace reshade
 
 		bool switch_to_next_preset(std::filesystem::path filter_path, bool reversed = false);
 
-		bool load_effect(const std::filesystem::path &source_file, const ini_file &preset, size_t effect_index, bool preprocess_required = false);
+		bool load_effect(const std::filesystem::path &source_file, const ini_file &preset, size_t effect_index, bool force_load = false, bool preprocess_required = false);
 		bool create_effect(size_t effect_index);
 		bool create_effect_sampler_state(const api::sampler_desc &desc, api::sampler &sampler);
 		void destroy_effect(size_t effect_index);
@@ -220,9 +191,9 @@ namespace reshade
 
 		void reorder_techniques(std::vector<size_t> &&technique_indices);
 
-		void load_effects();
+		void load_effects(bool force_load_all = false);
 		bool reload_effect(size_t effect_index);
-		void reload_effects();
+		void reload_effects(bool force_load_all = false);
 		void destroy_effects();
 
 		bool load_effect_cache(const std::string &id, const std::string &type, std::string &data) const;
@@ -235,7 +206,7 @@ namespace reshade
 		void render_technique(technique &technique, api::command_list *cmd_list, api::resource back_buffer_resource, api::resource_view back_buffer_rtv, api::resource_view back_buffer_rtv_srgb);
 
 		void save_texture(const texture &texture);
-		void update_texture(texture &texture, uint32_t width, uint32_t height, uint32_t depth, const uint8_t *pixels);
+		void update_texture(texture &texture, uint32_t width, uint32_t height, uint32_t depth, const void *pixels);
 
 		void reset_uniform_value(uniform &variable);
 
@@ -257,18 +228,38 @@ namespace reshade
 		}
 
 		bool get_preprocessor_definition(const std::string &effect_name, const std::string &name, std::vector<std::pair<std::string, std::string>> *&scope, std::vector<std::pair<std::string, std::string>>::iterator &value) const;
+#else
+		void save_current_preset() const final {}
 #endif
 
 		bool get_texture_data(api::resource resource, api::resource_usage state, uint8_t *pixels);
 
 		bool execute_screenshot_post_save_command(const std::filesystem::path &screenshot_path, unsigned int screenshot_count);
 
+		api::swapchain *const _swapchain;
+		api::device *const _device;
+		api::command_queue *const _graphics_queue;
+		unsigned int _width = 0;
+		unsigned int _height = 0;
+		unsigned int _vendor_id = 0;
+		unsigned int _device_id = 0;
+		unsigned int _renderer_id = 0;
+		uint16_t _back_buffer_samples = 1;
+		api::format _back_buffer_format = api::format::unknown;
+		api::color_space _back_buffer_color_space = api::color_space::unknown;
+		bool _is_vr = false;
+
+#if RESHADE_ADDON
+		bool _is_in_api_call = false;
+		bool _is_in_present_call = false;
+#endif
+
 		#pragma region Status
-		static bool s_needs_update;
 		static unsigned int s_latest_version[3];
 
 		bool _is_initialized = false;
-		bool _preset_save_successfull = true;
+		bool _preset_save_successful = true;
+		bool _should_save_config = false;
 		std::filesystem::path _config_path;
 
 		bool _ignore_shortcuts = false;
@@ -292,25 +283,21 @@ namespace reshade
 		bool _no_debug_info = true;
 		bool _no_effect_cache = false;
 		bool _no_reload_on_init = false;
-		bool _no_reload_for_non_vr = false;
 		bool _performance_mode = false;
 		bool _effect_load_skipping = false;
-		bool _load_option_disable_skipping = false;
 		unsigned int _reload_key_data[4] = {};
 		unsigned int _performance_mode_key_data[4] = {};
 
 		std::vector<std::pair<std::string, std::string>> _global_preprocessor_definitions;
 		std::unordered_map<std::string, std::vector<std::pair<std::string, std::string>>> _preset_preprocessor_definitions;
 		size_t _should_reload_effect = std::numeric_limits<size_t>::max();
-#if RESHADE_ADDON
-		bool _should_block_effect_reload = false;
-#endif
+		bool _block_effect_reload_this_frame = false;
 
 		std::filesystem::path _effect_cache_path;
 		std::vector<std::filesystem::path> _effect_search_paths;
 		std::vector<std::filesystem::path> _texture_search_paths;
 
-		std::atomic<bool> _last_reload_successfull = true;
+		std::atomic<bool> _last_reload_successful = true;
 		bool _textures_loaded = false;
 		std::shared_mutex _reload_mutex;
 		std::vector<size_t> _reload_create_queue;
@@ -352,6 +339,11 @@ namespace reshade
 		api::resource _back_buffer_resolved = {};
 		api::resource_view _back_buffer_resolved_srv = {};
 		std::vector<api::resource_view> _back_buffer_targets;
+
+		api::state_block _app_state = {};
+
+		api::fence _queue_sync_fence = {};
+		uint64_t _queue_sync_value = 0;
 		#pragma endregion
 
 		#pragma region Screenshot
@@ -373,11 +365,11 @@ namespace reshade
 		std::filesystem::path _screenshot_post_save_command;
 		std::string _screenshot_post_save_command_arguments;
 		std::filesystem::path _screenshot_post_save_command_working_directory;
-		bool _screenshot_post_save_command_no_window = false;
+		bool _screenshot_post_save_command_hide_window = false;
 
 		bool _should_save_screenshot = false;
-		std::atomic<bool> _last_screenshot_save_successfull = true;
-		bool _screenshot_directory_creation_successfull = true;
+		std::atomic<bool> _last_screenshot_save_successful = true;
+		bool _screenshot_directory_creation_successful = true;
 		std::filesystem::path _last_screenshot_file;
 		std::chrono::high_resolution_clock::time_point _last_screenshot_time;
 		#pragma endregion
@@ -496,12 +488,14 @@ namespace reshade
 		#pragma endregion
 
 		#pragma region Overlay Settings
+		std::string _language;
 		int _font_size = 0;
 		int _editor_font_size = 0;
 		int _style_index = 2;
 		int _editor_style_index = 0;
-		std::filesystem::path _font_path;
-		std::filesystem::path _editor_font_path;
+		std::filesystem::path _font_path, _default_font_path;
+		std::filesystem::path _latin_font_path;
+		std::filesystem::path _editor_font_path, _default_editor_font_path;
 		std::filesystem::path _file_selection_path;
 		float _fps_col[4] = { 1.0f, 1.0f, 0.784314f, 1.0f };
 		float _fps_scale = 1.0f;
@@ -518,11 +512,12 @@ namespace reshade
 		bool _gather_gpu_statistics = false;
 		api::resource_view _preview_texture = {};
 		unsigned int _preview_size[3] = { 0, 0, 0xFFFFFFFF };
+		uint64_t _timestamp_frequency = 0;
 #endif
 		#pragma endregion
 
 		#pragma region Overlay Log
-		char _log_filter[64] = {};
+		char _log_filter[32] = {};
 		bool _log_wordwrap = false;
 		uintmax_t _last_log_size;
 		std::vector<std::string> _log_lines;

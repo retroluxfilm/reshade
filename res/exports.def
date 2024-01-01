@@ -433,10 +433,14 @@ EXPORTS
 	wglUseFontOutlinesA PRIVATE
 	wglUseFontOutlinesW PRIVATE
 
+	; openxr_loader.dll
+	xrNegotiateLoaderApiLayerInterface
+
 	; vrclient[_x64].dll
 	VRClientCoreFactory PRIVATE
 
 	; vulkan-1.dll
+	vkNegotiateLoaderLayerInterfaceVersion
 	vkCreateDevice PRIVATE
 	vkCreateInstance PRIVATE
 	vkGetDeviceProcAddr PRIVATE

@@ -7,23 +7,25 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
 using System.Windows.Controls;
 using System.Windows.Navigation;
+using ReShade.Setup.Utilities;
 
 namespace ReShade.Setup.Pages
 {
 	public class Addon : INotifyPropertyChanged
 	{
-		public bool Enabled => !string.IsNullOrEmpty(MainWindow.is64Bit ? DownloadUrl64 : DownloadUrl32);
+		public bool Enabled => !string.IsNullOrEmpty(DownloadUrl);
 		public bool Selected { get; set; } = false;
 
 		public string Name { get; internal set; }
 		public string Description { get; internal set; }
 
-		public string DownloadUrl => MainWindow.is64Bit ? DownloadUrl64 : DownloadUrl32;
-		public string DownloadUrl32 { get; internal set; }
-		public string DownloadUrl64 { get; internal set; }
+		public string DownloadUrl { get; internal set; }
 		public string RepositoryUrl { get; internal set; }
 
 		public event PropertyChangedEventHandler PropertyChanged;
@@ -36,22 +38,51 @@ namespace ReShade.Setup.Pages
 
 	public partial class SelectAddonsPage : Page
 	{
-		public SelectAddonsPage(Utilities.IniFile addonsIni)
+		public SelectAddonsPage(bool is64Bit)
 		{
 			InitializeComponent();
 			DataContext = this;
 
-			foreach (var addon in addonsIni.GetSections())
+			Task.Run(() =>
 			{
-				Items.Add(new Addon
+				// Attempt to download add-ons list
+				using (var client = new WebClient())
 				{
-					Name = addonsIni.GetString(addon, "Name"),
-					Description = addonsIni.GetString(addon, "Description"),
-					DownloadUrl32 = addonsIni.GetString(addon, "DownloadUrl32"),
-					DownloadUrl64 = addonsIni.GetString(addon, "DownloadUrl64"),
-					RepositoryUrl = addonsIni.GetString(addon, "RepositoryUrl")
-				});
-			}
+					// Ensure files are downloaded again if they changed
+					client.CachePolicy = new System.Net.Cache.RequestCachePolicy(System.Net.Cache.RequestCacheLevel.Revalidate);
+
+					try
+					{
+						using (Stream addonsStream = client.OpenRead("https://raw.githubusercontent.com/crosire/reshade-shaders/list/Addons.ini"))
+						{
+							var addonsIni = new IniFile(addonsStream);
+
+							foreach (string addon in addonsIni.GetSections())
+							{
+								string downloadUrl = addonsIni.GetString(addon, "DownloadUrl");
+								if (string.IsNullOrEmpty(downloadUrl))
+								{
+									downloadUrl = addonsIni.GetString(addon, is64Bit ? "DownloadUrl64" : "DownloadUrl32");
+								}
+
+								var item = new Addon
+								{
+									Name = addonsIni.GetString(addon, "PackageName"),
+									Description = addonsIni.GetString(addon, "PackageDescription"),
+									DownloadUrl = downloadUrl,
+									RepositoryUrl = addonsIni.GetString(addon, "RepositoryUrl")
+								};
+
+								Dispatcher.Invoke(() => { Items.Add(item); });
+							}
+						}
+					}
+					catch (WebException)
+					{
+						// Ignore if this list failed to download, since setup can still proceed without it
+					}
+				}
+			});
 		}
 
 		public IEnumerable<Addon> SelectedItems => Items.Where(x => x.Selected);

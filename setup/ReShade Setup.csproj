@@ -100,26 +100,12 @@
     <Compile Include="Pages\SelectEffectsPage.xaml.cs">
       <DependentUpon>SelectEffectsPage.xaml</DependentUpon>
     </Compile>
-    <Page Include="Pages\SelectPackagesPage.xaml">
+    <Page Include="Pages\SelectOperationPage.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
-    <Compile Include="Pages\SelectPackagesPage.xaml.cs">
-      <DependentUpon>SelectPackagesPage.xaml</DependentUpon>
-    </Compile>
-    <Page Include="Pages\SelectPresetPage.xaml">
-      <SubType>Designer</SubType>
-      <Generator>MSBuild:Compile</Generator>
-    </Page>
-    <Compile Include="Pages\SelectPresetPage.xaml.cs">
-      <DependentUpon>SelectPresetPage.xaml</DependentUpon>
-    </Compile>
-    <Page Include="Pages\SelectUninstallPage.xaml">
-      <SubType>Designer</SubType>
-      <Generator>MSBuild:Compile</Generator>
-    </Page>
-    <Compile Include="Pages\SelectUninstallPage.xaml.cs">
-      <DependentUpon>SelectUninstallPage.xaml</DependentUpon>
+    <Compile Include="Pages\SelectOperationPage.xaml.cs">
+      <DependentUpon>SelectOperationPage.xaml</DependentUpon>
     </Compile>
     <Page Include="Pages\StatusPage.xaml">
       <SubType>Designer</SubType>
@@ -153,11 +139,14 @@
   </ItemGroup>
   <ItemGroup>
     <Archive Include="ReShade32.json" />
+    <Archive Include="ReShade32_XR.json" />
     <Archive Include="ReShade64.json" />
+    <Archive Include="ReShade64_XR.json" />
   </ItemGroup>
   <ItemGroup>
     <Resource Include="Pages\Resources\DirectX.png" />
     <Resource Include="Pages\Resources\OpenGL.png" />
+    <Resource Include="Pages\Resources\OpenXR.png" />
     <Resource Include="Pages\Resources\Vulkan.png" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.WindowsSDK.props" />

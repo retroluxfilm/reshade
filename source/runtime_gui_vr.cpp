@@ -10,6 +10,8 @@
 #include "dll_log.hpp"
 #include "dll_resources.hpp"
 #include "imgui_widgets.hpp"
+#include "localization.hpp"
+#include "addon_manager.hpp"
 #include "vulkan/vulkan_impl_device.hpp"
 #include <openvr.h>
 #include <ivrclientcore.h>
@@ -20,8 +22,8 @@ extern vr::IVRClientCore *g_client_core;
 static vr::VROverlayHandle_t s_main_handle = vr::k_ulOverlayHandleInvalid;
 static vr::VROverlayHandle_t s_thumbnail_handle = vr::k_ulOverlayHandleInvalid;
 
-static const uint32_t OVERLAY_WIDTH = 500;
-static const uint32_t OVERLAY_HEIGHT = 500;
+static constexpr uint32_t OVERLAY_WIDTH = 500;
+static constexpr uint32_t OVERLAY_HEIGHT = 500;
 
 bool reshade::runtime::init_gui_vr()
 {
@@ -30,7 +32,11 @@ bool reshade::runtime::init_gui_vr()
 
 	if (s_overlay == nullptr)
 	{
-		assert(g_client_core != nullptr);
+		if (g_client_core == nullptr)
+		{
+			LOG(ERROR) << "Failed to create VR dashboard overlay because SteamVR is not loaded!";
+			return true; // Do not prevent effect runtime from initializing
+		}
 
 		vr::EVRInitError init_e;
 		if ((s_overlay = static_cast<vr::IVROverlay *>(g_client_core->GetGenericInterface(vr::IVROverlay_Version, &init_e))) == nullptr)
@@ -62,7 +68,7 @@ bool reshade::runtime::init_gui_vr()
 
 	s_overlay->SetOverlayWidthInMeters(s_main_handle, 1.5f);
 
-	if (!_device->create_resource(api::resource_desc(OVERLAY_WIDTH, OVERLAY_HEIGHT, 1, 1, api::format::r8g8b8a8_unorm, 1, api::memory_heap::gpu_only, api::resource_usage::render_target | api::resource_usage::shader_resource), nullptr, api::resource_usage::shader_resource_pixel, &_vr_overlay_tex))
+	if (!_device->create_resource(api::resource_desc(OVERLAY_WIDTH, OVERLAY_HEIGHT, 1, 1, api::format::r8g8b8a8_unorm, 1, api::memory_heap::gpu_only, api::resource_usage::render_target | api::resource_usage::copy_source), nullptr, api::resource_usage::copy_source, &_vr_overlay_tex))
 	{
 		LOG(ERROR) << "Failed to create VR dashboard overlay texture!";
 		return false;
@@ -189,17 +195,21 @@ void reshade::runtime::draw_gui_vr()
 		s_overlay->SetKeyboardPositionForOverlay(s_main_handle, vr::HmdRect2_t { { 0.0f, 1.0f }, { 1.0f, 0.0f } });
 	}
 
-	static constexpr std::pair<const char *, void(runtime::*)()> overlay_callbacks[] = {
+#if RESHADE_LOCALIZATION
+	const std::string prev_language = resources::set_current_language(_language);
+#endif
+
+	const std::pair<std::string, void(runtime::*)()> overlay_callbacks[] = {
 #if RESHADE_FX
-		{ "Home", &runtime::draw_gui_home },
+		{ _("Home###home"), &runtime::draw_gui_home },
 #endif
 #if RESHADE_ADDON
-		{ "Add-ons", &runtime::draw_gui_addons },
+		{ _("Add-ons###addons"), &runtime::draw_gui_addons },
 #endif
-		{ "Settings", &runtime::draw_gui_settings },
-		{ "Statistics", &runtime::draw_gui_statistics },
-		{ "Log", &runtime::draw_gui_log },
-		{ "About", &runtime::draw_gui_about }
+		{ _("Settings###settings"), &runtime::draw_gui_settings },
+		{ _("Statistics###statistics"), &runtime::draw_gui_statistics },
+		{ _("Log###log"), &runtime::draw_gui_log },
+		{ _("About###about"), &runtime::draw_gui_about }
 	};
 
 	const ImGuiViewport *const viewport = ImGui::GetMainViewport();
@@ -218,10 +228,10 @@ void reshade::runtime::draw_gui_vr()
 	ImGui::BeginChild("##overlay", ImVec2(0, ImGui::GetFrameHeight()), false, ImGuiWindowFlags_NoScrollbar);
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(_imgui_context->Style.FramePadding.x, 0));
 
-	for (const std::pair<const char *, void(runtime:: *)()> &widget : overlay_callbacks)
+	for (const std::pair<std::string, void(runtime:: *)()> &widget : overlay_callbacks)
 	{
 		if (bool state = (overlay_index == selected_overlay_index);
-			imgui::toggle_button(widget.first, state, 0.0f, ImGuiButtonFlags_AlignTextBaseLine))
+			imgui::toggle_button(widget.first.c_str(), state, 0.0f, ImGuiButtonFlags_AlignTextBaseLine))
 			selected_overlay_index = overlay_index;
 		ImGui::SameLine();
 
@@ -286,6 +296,10 @@ void reshade::runtime::draw_gui_vr()
 
 	ImGui::End(); // VR Viewport window
 
+#if RESHADE_LOCALIZATION
+	resources::set_current_language(prev_language);
+#endif
+
 	ImGui::Render();
 
 	if (ImDrawData *const draw_data = ImGui::GetDrawData();
@@ -293,9 +307,9 @@ void reshade::runtime::draw_gui_vr()
 	{
 		api::command_list *const cmd_list = _graphics_queue->get_immediate_command_list();
 
-		cmd_list->barrier(_vr_overlay_tex, api::resource_usage::shader_resource_pixel, api::resource_usage::render_target);
+		cmd_list->barrier(_vr_overlay_tex, api::resource_usage::copy_source, api::resource_usage::render_target);
 		render_imgui_draw_data(cmd_list, draw_data, _vr_overlay_target);
-		cmd_list->barrier(_vr_overlay_tex, api::resource_usage::render_target, api::resource_usage::shader_resource_pixel);
+		cmd_list->barrier(_vr_overlay_tex, api::resource_usage::render_target, api::resource_usage::copy_source);
 	}
 
 	ImGui::SetCurrentContext(backup_context);

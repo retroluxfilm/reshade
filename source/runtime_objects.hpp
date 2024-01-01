@@ -6,6 +6,7 @@
 #pragma once
 
 #include "effect_module.hpp"
+#include "moving_average.hpp"
 
 namespace reshade
 {
@@ -30,42 +31,12 @@ namespace reshade
 		unknown
 	};
 
-	template <typename T, size_t SAMPLES>
-	class moving_average
-	{
-	public:
-		moving_average() : _index(0), _average(0), _tick_sum(0), _tick_list() {}
-
-		inline operator T() const { return _average; }
-
-		void clear()
-		{
-			_index = 0;
-			_average = 0;
-			_tick_sum = 0;
-
-			for (size_t i = 0; i < SAMPLES; i++)
-				_tick_list[i] = 0;
-		}
-		void append(T value)
-		{
-			_tick_sum -= _tick_list[_index];
-			_tick_sum += _tick_list[_index] = value;
-			_index = ++_index % SAMPLES;
-			_average = _tick_sum / SAMPLES;
-		}
-
-	private:
-		size_t _index;
-		T _average, _tick_sum, _tick_list[SAMPLES];
-	};
-
 #if RESHADE_FX
 	struct texture final : reshadefx::texture_info
 	{
 		texture(const reshadefx::texture_info &init) : texture_info(init) {}
 
-		auto annotation_as_int(const char *ann_name, size_t i = 0, int default_value = 0) const
+		auto annotation_as_int(const std::string_view ann_name, size_t i = 0, int default_value = 0) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -75,7 +46,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_integral() ? it->value.as_int[i] : static_cast<int>(it->value.as_float[i]);
 		}
-		auto annotation_as_uint(const char *ann_name, size_t i = 0, unsigned int default_value = 0) const
+		auto annotation_as_uint(const std::string_view ann_name, size_t i = 0, unsigned int default_value = 0) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -85,7 +56,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_integral() ? it->value.as_uint[i] : static_cast<unsigned int>(it->value.as_float[i]);
 		}
-		auto annotation_as_float(const char *ann_name, size_t i = 0, float default_value = 0.0f) const
+		auto annotation_as_float(const std::string_view ann_name, size_t i = 0, float default_value = 0.0f) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -95,7 +66,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_floating_point() ? it->value.as_float[i] : static_cast<float>(it->value.as_int[i]);
 		}
-		auto annotation_as_string(const char *ann_name, const std::string_view &default_value = std::string_view()) const
+		auto annotation_as_string(const std::string_view ann_name, const std::string_view &default_value = std::string_view()) const
 		{
 			const auto it = std::find_if(annotations.cbegin(), annotations.cend(),
 				[ann_name](const reshadefx::annotation &annotation) { return annotation.name == ann_name; });
@@ -124,7 +95,7 @@ namespace reshade
 	{
 		uniform(const reshadefx::uniform_info &init) : uniform_info(init) {}
 
-		auto annotation_as_int(const char *ann_name, size_t i = 0, int default_value = 0) const
+		auto annotation_as_int(const std::string_view ann_name, size_t i = 0, int default_value = 0) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -134,7 +105,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_integral() ? it->value.as_int[i] : static_cast<int>(it->value.as_float[i]);
 		}
-		auto annotation_as_uint(const char *ann_name, size_t i = 0, unsigned int default_value = 0) const
+		auto annotation_as_uint(const std::string_view ann_name, size_t i = 0, unsigned int default_value = 0) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -144,7 +115,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_integral() ? it->value.as_uint[i] : static_cast<unsigned int>(it->value.as_float[i]);
 		}
-		auto annotation_as_float(const char *ann_name, size_t i = 0, float default_value = 0.0f) const
+		auto annotation_as_float(const std::string_view ann_name, size_t i = 0, float default_value = 0.0f) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -154,7 +125,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_floating_point() ? it->value.as_float[i] : static_cast<float>(it->value.as_int[i]);
 		}
-		auto annotation_as_string(const char *ann_name, const std::string_view &default_value = std::string_view()) const
+		auto annotation_as_string(const std::string_view ann_name, const std::string_view &default_value = std::string_view()) const
 		{
 			const auto it = std::find_if(annotations.cbegin(), annotations.cend(),
 				[ann_name](const reshadefx::annotation &annotation) { return annotation.name == ann_name; });
@@ -183,7 +154,7 @@ namespace reshade
 	{
 		technique(const reshadefx::technique_info &init) : technique_info(init) {}
 
-		auto annotation_as_int(const char *ann_name, size_t i = 0, int default_value = 0) const
+		auto annotation_as_int(const std::string_view ann_name, size_t i = 0, int default_value = 0) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -193,7 +164,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_integral() ? it->value.as_int[i] : static_cast<int>(it->value.as_float[i]);
 		}
-		auto annotation_as_uint(const char *ann_name, size_t i = 0, unsigned int default_value = 0) const
+		auto annotation_as_uint(const std::string_view ann_name, size_t i = 0, unsigned int default_value = 0) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -203,7 +174,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_integral() ? it->value.as_uint[i] : static_cast<unsigned int>(it->value.as_float[i]);
 		}
-		auto annotation_as_float(const char *ann_name, size_t i = 0, float default_value = 0.0f) const
+		auto annotation_as_float(const std::string_view ann_name, size_t i = 0, float default_value = 0.0f) const
 		{
 			if (i >= 16)
 				return default_value;
@@ -213,7 +184,7 @@ namespace reshade
 				return default_value;
 			return it->type.is_floating_point() ? it->value.as_float[i] : static_cast<float>(it->value.as_int[i]);
 		}
-		auto annotation_as_string(const char *ann_name, const std::string_view &default_value = std::string_view()) const
+		auto annotation_as_string(const std::string_view ann_name, const std::string_view &default_value = std::string_view()) const
 		{
 			const auto it = std::find_if(annotations.cbegin(), annotations.cend(),
 				[ann_name](const reshadefx::annotation &annotation) { return annotation.name == ann_name; });
