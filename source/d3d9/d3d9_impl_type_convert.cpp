@@ -338,7 +338,7 @@ void reshade::d3d9::convert_resource_usage_to_d3d_usage(api::resource_usage usag
 {
 	// Copying textures is implemented using the rasterization pipeline (see 'device_impl::copy_resource' implementation), so needs render target usage
 	// When the destination in 'IDirect3DDevice9::StretchRect' is a texture surface, it too has to have render target usage (see https://docs.microsoft.com/windows/win32/api/d3d9helper/nf-d3d9helper-idirect3ddevice9-stretchrect)
-	if ((usage & (api::resource_usage::render_target | api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != 0)
+	if ((usage & (api::resource_usage::render_target | api::resource_usage::copy_dest | api::resource_usage::resolve_dest)) != 0 && (usage & api::resource_usage::depth_stencil) == 0)
 		d3d_usage |= D3DUSAGE_RENDERTARGET;
 	else
 		d3d_usage &= ~D3DUSAGE_RENDERTARGET;
@@ -661,10 +661,10 @@ reshade::api::resource_desc reshade::d3d9::convert_resource_desc(const D3DSURFAC
 		case D3DFMT_D24FS8:
 		case D3DFMT_D32_LOCKABLE:
 		case D3DFMT_S8_LOCKABLE:
-			// Stretching depth stencil surfaces is extremly limited (does not support copying from surface to texture for example), so just do not allow it
 			assert((internal_desc.Usage & D3DUSAGE_DEPTHSTENCIL) != 0);
 			if (internal_desc.MultiSampleType != D3DMULTISAMPLE_NONE)
 				desc.usage |= api::resource_usage::resolve_source;
+			// Stretching depth-stencil surfaces is extremly limited (does not support copying from surface to texture for example), so just do not allow it
 			break;
 		case MAKEFOURCC('N', 'U', 'L', 'L'):
 			// Special render target format that has no memory attached, so cannot be copied

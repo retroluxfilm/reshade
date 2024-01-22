@@ -68,14 +68,19 @@ std::string reshade::resources::set_current_language(const std::string &language
 	if (language == prev_language)
 		return language;
 
+	constexpr WCHAR english_language[] = L"en-US";
+
 	// Create new double null-terminated buffer with the new language
 	languages.clear();
-	languages.reserve(language.size() + 2);
+	languages.reserve(language.size() + std::size(english_language) + 2);
 	utf8::unchecked::utf8to16(language.begin(), language.end(), std::back_inserter(languages));
 	languages.push_back(L'\0');
+	if (!language.empty())
+		// Fall back to English by default if a resource does not exist in the specified language
+		languages.insert(languages.end(), english_language, english_language + std::size(english_language));
 	languages.push_back(L'\0');
 
-	SetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, languages.data(), nullptr);
+	SetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, languages.data(), &num);
 
 	return prev_language;
 }

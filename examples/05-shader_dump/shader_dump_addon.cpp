@@ -3,10 +3,8 @@
  * SPDX-License-Identifier: BSD-3-Clause OR MIT
  */
 
-// The subdirectory to save shader binaries to
-#define SAVE_DIR L""
-
 #include <reshade.hpp>
+#include "config.hpp"
 #include "crc32_hash.hpp"
 #include <fstream>
 #include <filesystem>
@@ -33,7 +31,7 @@ static void save_shader_code(device_api device_type, const shader_desc &desc)
 
 	std::filesystem::path dump_path = file_prefix;
 	dump_path  = dump_path.parent_path();
-	dump_path /= SAVE_DIR;
+	dump_path /= RESHADE_ADDON_SHADER_SAVE_DIR;
 
 	if (std::filesystem::exists(dump_path) == false)
 		std::filesystem::create_directory(dump_path);
@@ -41,7 +39,7 @@ static void save_shader_code(device_api device_type, const shader_desc &desc)
 	wchar_t hash_string[11];
 	swprintf_s(hash_string, L"0x%08X", shader_hash);
 
-	dump_path += hash_string;
+	dump_path /= hash_string;
 	dump_path += extension;
 
 	std::ofstream file(dump_path, std::ios::binary);
@@ -63,6 +61,14 @@ static bool on_create_pipeline(device *device, pipeline_layout, uint32_t subobje
 		case pipeline_subobject_type::geometry_shader:
 		case pipeline_subobject_type::pixel_shader:
 		case pipeline_subobject_type::compute_shader:
+		case pipeline_subobject_type::amplification_shader:
+		case pipeline_subobject_type::mesh_shader:
+		case pipeline_subobject_type::raygen_shader:
+		case pipeline_subobject_type::any_hit_shader:
+		case pipeline_subobject_type::closest_hit_shader:
+		case pipeline_subobject_type::miss_shader:
+		case pipeline_subobject_type::intersection_shader:
+		case pipeline_subobject_type::callable_shader:
 			save_shader_code(device_type, *static_cast<const shader_desc *>(subobjects[i].data));
 			break;
 		}
@@ -72,7 +78,7 @@ static bool on_create_pipeline(device *device, pipeline_layout, uint32_t subobje
 }
 
 extern "C" __declspec(dllexport) const char *NAME = "Shader Dump";
-extern "C" __declspec(dllexport) const char *DESCRIPTION = "Example add-on that dumps all shader binaries used by the application to disk.";
+extern "C" __declspec(dllexport) const char *DESCRIPTION = "Example add-on that dumps all shader binaries used by the application to disk (\"" RESHADE_ADDON_SHADER_SAVE_DIR "\" directory).";
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 {

@@ -49,35 +49,58 @@ reshade::api::device *reshade::d3d11::command_list_impl::get_device()
 	return _device_impl;
 }
 
-void reshade::d3d11::device_context_impl::barrier(uint32_t count, const api::resource *, const api::resource_usage *old_states, const api::resource_usage *new_states)
+void reshade::d3d11::device_context_impl::barrier(uint32_t count, const api::resource *resources, const api::resource_usage *old_states, const api::resource_usage *new_states)
 {
-	bool transitions_away_from_shader_resource_usage = false;
-	bool transitions_away_from_unordered_access_usage = false;
+	uint32_t transitions_away_from_shader_resource_usage = 0;
+	temp_mem<ID3D11Resource *> shader_resource_resources(count);
+	uint32_t transitions_away_from_unordered_access_usage = 0;
+	temp_mem<ID3D11Resource *> unordered_access_resources(count);
+
 	for (uint32_t i = 0; i < count; ++i)
 	{
 		if ((old_states[i] & api::resource_usage::shader_resource) != 0 && (new_states[i] & api::resource_usage::shader_resource) == 0 &&
 			// Ignore transitions to copy source or destination states, since those are not affected by the current SRV bindings
 			(new_states[i] & (api::resource_usage::depth_stencil | api::resource_usage::render_target)) != 0)
-			transitions_away_from_shader_resource_usage = true;
+			shader_resource_resources[transitions_away_from_shader_resource_usage++] = reinterpret_cast<ID3D11Resource *>(resources[i].handle);
 		if ((old_states[i] & api::resource_usage::unordered_access) != 0 && (new_states[i] & api::resource_usage::unordered_access) == 0)
-			transitions_away_from_unordered_access_usage = true;
+			unordered_access_resources[transitions_away_from_unordered_access_usage++] = reinterpret_cast<ID3D11Resource *>(resources[i].handle);
 	}
 
-	// TODO: This should really only unbind the specific resources passed to this barrier command
-	if (transitions_away_from_shader_resource_usage)
+	if (transitions_away_from_shader_resource_usage != 0)
 	{
-		ID3D11ShaderResourceView *null_srv[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-		_orig->VSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, null_srv);
+#define UNBIND_SHADER_RESOURCE_VIEWS(stage) \
+		bool update_##stage = false; \
+		com_ptr<ID3D11ShaderResourceView> srvs_##stage[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT]; \
+		_orig->stage##GetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, reinterpret_cast<ID3D11ShaderResourceView **>(srvs_##stage)); \
+		for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; ++i) \
+		{ \
+			if (srvs_##stage[i] != nullptr) \
+			{ \
+				com_ptr<ID3D11Resource> resource; \
+				srvs_##stage[i]->GetResource(&resource); \
+				if (std::find(shader_resource_resources.p, shader_resource_resources.p + transitions_away_from_shader_resource_usage, resource) != shader_resource_resources.p + transitions_away_from_shader_resource_usage) \
+				{ \
+					srvs_##stage[i].reset(); \
+					update_##stage = true; \
+				} \
+			} \
+		} \
+		if (update_##stage) \
+			_orig->stage##SetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, reinterpret_cast<ID3D11ShaderResourceView *const *>(srvs_##stage));
+
+		UNBIND_SHADER_RESOURCE_VIEWS(VS);
 #if 0
 		// Not currently covered by state block (see d3d11_impl_state_block.cpp)
-		_orig->HSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, null_srv);
-		_orig->DSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, null_srv);
+		UNBIND_SHADER_RESOURCE_VIEWS(HS);
+		UNBIND_SHADER_RESOURCE_VIEWS(DS);
 #endif
-		_orig->GSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, null_srv);
-		_orig->PSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, null_srv);
-		_orig->CSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, null_srv);
+		UNBIND_SHADER_RESOURCE_VIEWS(GS);
+		UNBIND_SHADER_RESOURCE_VIEWS(PS);
+		UNBIND_SHADER_RESOURCE_VIEWS(CS);
+
+#undef UNBIND_SHADER_RESOURCE_VIEWS
 	}
-	if (transitions_away_from_unordered_access_usage)
+	if (transitions_away_from_unordered_access_usage != 0)
 	{
 		const D3D_FEATURE_LEVEL feature_level = _device_impl->_orig->GetFeatureLevel();
 		const UINT max_uav_bindings =
@@ -85,8 +108,29 @@ void reshade::d3d11::device_context_impl::barrier(uint32_t count, const api::res
 			feature_level == D3D_FEATURE_LEVEL_11_0 ? D3D11_PS_CS_UAV_REGISTER_COUNT :
 			feature_level >= D3D_FEATURE_LEVEL_10_0 ? D3D11_CS_4_X_UAV_REGISTER_COUNT : 0;
 
-		ID3D11UnorderedAccessView *null_uav[D3D11_1_UAV_SLOT_COUNT] = {};
-		_orig->CSSetUnorderedAccessViews(0, max_uav_bindings, null_uav, nullptr);
+#define UNBIND_UNORDERED_ACCESS_VIEWS(stage) \
+		bool update_##stage = false; \
+		com_ptr<ID3D11UnorderedAccessView> uavs_##stage[D3D11_1_UAV_SLOT_COUNT]; \
+		_orig->stage##GetUnorderedAccessViews(0, max_uav_bindings, reinterpret_cast<ID3D11UnorderedAccessView **>(uavs_##stage)); \
+		for (UINT i = 0; i < max_uav_bindings; ++i) \
+		{ \
+			if (uavs_##stage[i] != nullptr) \
+			{ \
+				com_ptr<ID3D11Resource> resource; \
+				uavs_##stage[i]->GetResource(&resource); \
+				if (std::find(unordered_access_resources.p, unordered_access_resources.p + transitions_away_from_unordered_access_usage, resource) != unordered_access_resources.p + transitions_away_from_unordered_access_usage) \
+				{ \
+					uavs_##stage[i].reset(); \
+					update_##stage = true; \
+				} \
+			} \
+		} \
+		if (update_##stage) \
+			_orig->stage##SetUnorderedAccessViews(0, max_uav_bindings, reinterpret_cast<ID3D11UnorderedAccessView *const *>(uavs_##stage), nullptr);
+
+		UNBIND_UNORDERED_ACCESS_VIEWS(CS);
+
+#undef UNBIND_UNORDERED_ACCESS_VIEWS
 	}
 }
 
@@ -555,6 +599,14 @@ void reshade::d3d11::device_context_impl::dispatch(uint32_t group_count_x, uint3
 {
 	_orig->Dispatch(group_count_x, group_count_y, group_count_z);
 }
+void reshade::d3d11::device_context_impl::dispatch_mesh(uint32_t, uint32_t, uint32_t)
+{
+	assert(false);
+}
+void reshade::d3d11::device_context_impl::dispatch_rays(api::resource, uint64_t, uint64_t, api::resource, uint64_t, uint64_t, uint64_t, api::resource, uint64_t, uint64_t, uint64_t, api::resource, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t, uint32_t)
+{
+	assert(false);
+}
 void reshade::d3d11::device_context_impl::draw_or_dispatch_indirect(api::indirect_command type, api::resource buffer, uint64_t offset, uint32_t draw_count, uint32_t stride)
 {
 	assert(offset <= std::numeric_limits<UINT>::max());
@@ -572,6 +624,9 @@ void reshade::d3d11::device_context_impl::draw_or_dispatch_indirect(api::indirec
 	case api::indirect_command::dispatch:
 		for (UINT i = 0; i < draw_count; ++i)
 			_orig->DispatchIndirect(reinterpret_cast<ID3D11Buffer *>(buffer.handle), static_cast<UINT>(offset) + i * stride);
+		break;
+	default:
+		assert(false);
 		break;
 	}
 }
@@ -676,6 +731,15 @@ void reshade::d3d11::device_context_impl::end_query(api::query_heap heap, api::q
 	_orig->End(reinterpret_cast<query_heap_impl *>(heap.handle)->queries[index].get());
 }
 void reshade::d3d11::device_context_impl::copy_query_heap_results(api::query_heap, api::query_type, uint32_t, uint32_t, api::resource, uint64_t, uint32_t)
+{
+	assert(false);
+}
+
+void reshade::d3d11::device_context_impl::copy_acceleration_structure(api::resource_view, api::resource_view, api::acceleration_structure_copy_mode)
+{
+	assert(false);
+}
+void reshade::d3d11::device_context_impl::build_acceleration_structure(api::acceleration_structure_type, api::acceleration_structure_build_flags, uint32_t, const api::acceleration_structure_build_input *, api::resource, uint64_t, api::resource_view, api::resource_view, api::acceleration_structure_build_mode)
 {
 	assert(false);
 }

@@ -103,6 +103,8 @@ namespace reshade
 		bool get_annotation_uint_from_uniform_variable(api::effect_uniform_variable variable, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_string_from_uniform_variable(api::effect_uniform_variable variable, const char *name, char *value, size_t *value_size) const final;
 
+		void reset_uniform_value(api::effect_uniform_variable variable);
+
 		void get_uniform_value_bool(api::effect_uniform_variable variable, bool *values, size_t count, size_t array_index) const final;
 		void get_uniform_value_float(api::effect_uniform_variable variable, float *values, size_t count, size_t array_index) const final;
 		void get_uniform_value_int(api::effect_uniform_variable variable, int32_t *values, size_t count, size_t array_index) const final;
@@ -227,7 +229,7 @@ namespace reshade
 			set_uniform_value(variable, values, 4, 0);
 		}
 
-		bool get_preprocessor_definition(const std::string &effect_name, const std::string &name, std::vector<std::pair<std::string, std::string>> *&scope, std::vector<std::pair<std::string, std::string>>::iterator &value) const;
+		bool get_preprocessor_definition(const std::string &effect_name, const std::string &name, int scope_mask, std::vector<std::pair<std::string, std::string>> *&scope, std::vector<std::pair<std::string, std::string>>::iterator &value) const;
 #else
 		void save_current_preset() const final {}
 #endif
@@ -259,7 +261,6 @@ namespace reshade
 
 		bool _is_initialized = false;
 		bool _preset_save_successful = true;
-		bool _should_save_config = false;
 		std::filesystem::path _config_path;
 
 		bool _ignore_shortcuts = false;
@@ -443,6 +444,7 @@ namespace reshade
 		unsigned int _reload_count = 0;
 #endif
 
+		bool _is_font_scaling = false;
 		bool _no_font_scaling = false;
 		bool _block_input_next_frame = false;
 		unsigned int _overlay_key_data[4];
@@ -488,7 +490,7 @@ namespace reshade
 		#pragma endregion
 
 		#pragma region Overlay Settings
-		std::string _language;
+		std::string _selected_language, _current_language;
 		int _font_size = 0;
 		int _editor_font_size = 0;
 		int _style_index = 2;

@@ -4,7 +4,7 @@
  */
 
 #include "runtime.hpp"
-#include "runtime_objects.hpp"
+#include "runtime_internal.hpp"
 #include "effect_parser.hpp"
 #include "effect_codegen.hpp"
 #include "effect_preprocessor.hpp"
@@ -29,7 +29,7 @@
 #include <stb_image.h>
 #include <stb_image_dds.h>
 #include <stb_image_write.h>
-#include <stb_image_resize.h>
+#include <stb_image_resize2.h>
 #include <d3dcompiler.h>
 
 bool resolve_path(std::filesystem::path &path, std::error_code &ec)
@@ -41,6 +41,8 @@ bool resolve_path(std::filesystem::path &path, std::error_code &ec)
 	// Finally try to canonicalize the path too
 	if (std::filesystem::path canonical_path = std::filesystem::canonical(path, ec); !ec)
 		path = std::move(canonical_path);
+	else
+		path = path.lexically_normal();
 	return !ec; // The canonicalization step fails if the path does not exist
 }
 
@@ -211,67 +213,6 @@ static inline int format_color_bit_depth(reshade::api::format value)
 }
 #endif
 
-static std::shared_mutex s_runtime_config_names_mutex;
-static std::unordered_set<std::string> s_runtime_config_names;
-
-void reshade::create_effect_runtime(api::swapchain *swapchain, api::command_queue *graphics_queue, bool is_vr)
-{
-	if (graphics_queue == nullptr)
-		return;
-
-	assert((graphics_queue->get_type() & api::command_queue_type::graphics) != 0);
-
-	// Try to find a unique configuration name for this effect runtime instance
-	std::string config_name = "ReShade";
-	if (is_vr)
-		config_name += "VR";
-	{
-		const std::string config_name_base = config_name;
-
-		const std::unique_lock<std::shared_mutex> lock(s_runtime_config_names_mutex);
-
-		for (int attempt = 1; attempt < 100 && s_runtime_config_names.find(config_name) != s_runtime_config_names.end(); ++attempt)
-			config_name = config_name_base + std::to_string(attempt + 1);
-
-		assert(s_runtime_config_names.find(config_name) == s_runtime_config_names.end());
-		s_runtime_config_names.insert(config_name);
-	}
-
-	const ini_file &config = ini_file::load_cache(g_reshade_base_path / std::filesystem::u8path(config_name + ".ini"));
-	if (config.get("GENERAL", "Disable"))
-		return;
-
-	swapchain->create_private_data<reshade::runtime>(swapchain, graphics_queue, config.path(), is_vr);
-}
-void reshade::destroy_effect_runtime(api::swapchain *swapchain)
-{
-	if (const auto runtime = &swapchain->get_private_data<reshade::runtime>())
-	{
-		// Free up the configuration name of this effect runtime instance for reuse
-		const std::unique_lock<std::shared_mutex> lock(s_runtime_config_names_mutex);
-
-		s_runtime_config_names.erase(runtime->get_config_path().stem().u8string());
-	}
-
-	swapchain->destroy_private_data<reshade::runtime>();
-}
-
-void reshade::init_effect_runtime(api::swapchain *swapchain)
-{
-	if (const auto runtime = &swapchain->get_private_data<reshade::runtime>())
-		runtime->on_init();
-}
-void reshade::reset_effect_runtime(api::swapchain *swapchain)
-{
-	if (const auto runtime = &swapchain->get_private_data<reshade::runtime>())
-		runtime->on_reset();
-}
-void reshade::present_effect_runtime(api::swapchain *swapchain, reshade::api::command_queue *present_queue)
-{
-	if (const auto runtime = &swapchain->get_private_data<reshade::runtime>())
-		runtime->on_present(present_queue);
-}
-
 reshade::runtime::runtime(api::swapchain *swapchain, api::command_queue *graphics_queue, const std::filesystem::path &config_path, bool is_vr) :
 	_swapchain(swapchain),
 	_device(swapchain->get_device()),
@@ -292,11 +233,10 @@ reshade::runtime::runtime(api::swapchain *swapchain, api::command_queue *graphic
 {
 	assert(swapchain != nullptr && graphics_queue != nullptr);
 
-	const api::device_properties props = _device->get_properties();
-	_vendor_id = props.vendor_id;
-	_device_id = props.device_id;
+	_device->get_property(api::device_properties::vendor_id, &_vendor_id);
+	_device->get_property(api::device_properties::device_id, &_device_id);
 
-	_renderer_id = props.api_version;
+	_device->get_property(api::device_properties::api_version, &_renderer_id);
 	switch (_device->get_api())
 	{
 	case api::device_api::d3d9:
@@ -312,10 +252,14 @@ reshade::runtime::runtime(api::swapchain *swapchain, api::command_queue *graphic
 		break;
 	}
 
-	if (props.driver_version != 0)
-		LOG(INFO) << "Running on " << props.description << " Driver " << (props.driver_version / 100) << '.' << (props.driver_version % 100) << '.';
+	char device_description[256] = "";
+	_device->get_property(api::device_properties::description, device_description);
+
+	if (uint32_t driver_version = 0;
+		_device->get_property(api::device_properties::driver_version, &driver_version))
+		LOG(INFO) << "Running on " << device_description << " Driver " << (driver_version / 100) << '.' << (driver_version % 100) << '.';
 	else
-		LOG(INFO) << "Running on " << props.description << '.';
+		LOG(INFO) << "Running on " << device_description << '.';
 
 	check_for_update();
 
@@ -329,6 +273,10 @@ reshade::runtime::runtime(api::swapchain *swapchain, api::command_queue *graphic
 #if RESHADE_GUI
 	init_gui();
 #endif
+
+	// Ensure config path is absolute, in case an add-on created an effect runtime with a relative path
+	std::error_code ec;
+	resolve_path(_config_path, ec);
 
 	load_config();
 
@@ -922,12 +870,6 @@ void reshade::runtime::on_present(api::command_queue *present_queue)
 	if (_input_gamepad != nullptr)
 		_input_gamepad->next_frame();
 
-	if (_should_save_config)
-	{
-		_should_save_config = false;
-		save_config();
-	}
-
 	// Save modified INI files
 	if (!ini_file::flush_cache())
 		_preset_save_successful = false;
@@ -1498,15 +1440,6 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 	attributes += "vendor=" + std::to_string(_vendor_id) + ';';
 	attributes += "device=" + std::to_string(_device_id) + ';';
 
-	std::vector<std::string> addon_markers; addon_markers.reserve(addon_loaded_info.size());
-	for (const auto &addon : addon_loaded_info)
-	{
-		std::string name; name.reserve(addon.name.size());
-		std::transform(addon.name.begin(), addon.name.end(), std::back_inserter(name),
-			[](const char c) { return ('9' >= c && c >= '0') ? c : ('Z' >= c && c >= 'A') ? c : ('z' >= c && c >= 'a') ? (c - 'a' + 'A') : '_'; });
-		attributes += addon_markers.emplace_back("ADDON_" + name) + ';';
-	}
-
 	const std::string effect_name = source_file.filename().u8string();
 
 	std::vector<std::pair<std::string, std::string>> preprocessor_definitions = _global_preprocessor_definitions;
@@ -1517,6 +1450,20 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 	if (const auto preset_it = _preset_preprocessor_definitions.find(effect_name);
 		preset_it != _preset_preprocessor_definitions.end())
 		preprocessor_definitions.insert(preprocessor_definitions.begin(), preset_it->second.cbegin(), preset_it->second.cend());
+
+#if RESHADE_ADDON
+	std::vector<std::string> addon_definitions;
+	addon_definitions.reserve(addon_loaded_info.size());
+	for (const addon_info &info : addon_loaded_info)
+	{
+		std::string addon_definition;
+		addon_definition.reserve(6 + info.name.size());
+		addon_definition = "ADDON_";
+		std::transform(info.name.begin(), info.name.end(), std::back_inserter(addon_definition),
+			[](const std::string::value_type c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ? c : (c >= 'a' && c <= 'z') ? static_cast<std::string::value_type>(c - 'a' + 'A') : '_'; });
+		preprocessor_definitions.emplace_back(addon_definition, std::to_string(std::max(1, info.version.number.major * 10000 + info.version.number.minor * 100 + info.version.number.build)));
+	}
+#endif
 
 	for (const std::pair<std::string, std::string> &definition : preprocessor_definitions)
 		attributes += definition.first + '=' + definition.second + ';';
@@ -1616,9 +1563,6 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 		pp.add_macro_definition("BUFFER_RCP_HEIGHT", "(1.0 / BUFFER_HEIGHT)");
 		pp.add_macro_definition("BUFFER_COLOR_SPACE", std::to_string(static_cast<uint32_t>(_back_buffer_color_space)));
 		pp.add_macro_definition("BUFFER_COLOR_BIT_DEPTH", std::to_string(format_color_bit_depth(_effect_color_format)));
-
-		for (const std::string &addon_marker : addon_markers)
-			pp.add_macro_definition(addon_marker);
 
 		for (const std::pair<std::string, std::string> &definition : preprocessor_definitions)
 		{
@@ -2098,6 +2042,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 			{
 				assert(_renderer_id >= 0x14600); // Core since OpenGL 4.6 (see https://www.khronos.org/opengl/wiki/SPIR-V)
 
+#if 1
 				// There are various issues with SPIR-V modules that have multiple entry points on all major GPU vendors.
 				// On AMD for instance creating a graphics pipeline just fails with a generic 'VK_ERROR_OUT_OF_HOST_MEMORY'. On NVIDIA artifacts occur on some driver versions.
 				// To work around these problems, create a separate shader module for every entry point and rewrite the SPIR-V module for each to remove all but a single entry point (and associated functions/variables).
@@ -2172,6 +2117,10 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 
 				cso.resize(spirv.size() * sizeof(uint32_t));
 				std::memcpy(cso.data(), spirv.data(), cso.size());
+#else
+				cso.resize(effect.module.code.size());
+				std::memcpy(cso.data(), effect.module.code.data(), effect.module.code.size());
+#endif
 			}
 		}
 
@@ -2974,10 +2923,14 @@ void reshade::runtime::destroy_effect(size_t effect_index)
 	_textures.erase(std::remove_if(_textures.begin(), _textures.end(),
 		[this, effect_index](texture &tex) {
 			tex.shared.erase(std::remove(tex.shared.begin(), tex.shared.end(), effect_index), tex.shared.end());
-			if (tex.shared.empty()) {
+			if (tex.shared.empty())
+			{
 				destroy_texture(tex);
 				return true;
 			}
+			// If this texture is still used by another effect, move ownership to that other effect
+			if (effect_index == tex.effect_index)
+				tex.effect_index = tex.shared.front();
 			return false;
 		}), _textures.end());
 	// Clean up techniques belonging to this effect
@@ -3655,14 +3608,15 @@ bool reshade::runtime::update_effect_color_and_stencil_tex(uint32_t width, uint3
 	assert(width != 0 && height != 0);
 	assert(color_format != api::format::unknown && stencil_format != api::format::unknown);
 
-	color_format = api::format_to_typeless(color_format);
+	const api::format color_format_typeless = api::format_to_typeless(color_format);
 
 	if (_effect_color_tex != 0)
 	{
-		if (_effect_width == width && _effect_height == height && _effect_color_format == color_format && _effect_stencil_format == stencil_format)
+		if (_effect_width == width && _effect_height == height && _effect_color_format == color_format_typeless && _effect_stencil_format == stencil_format)
 			return true;
 
-		_graphics_queue->wait_idle();
+		if (_device->get_api() == api::device_api::d3d12 || _device->get_api() == api::device_api::vulkan)
+			_graphics_queue->wait_idle();
 
 		_device->destroy_resource(_effect_color_tex);
 		_effect_color_tex = {};
@@ -3678,21 +3632,21 @@ bool reshade::runtime::update_effect_color_and_stencil_tex(uint32_t width, uint3
 	}
 
 	if (!_device->create_resource(
-			api::resource_desc(width, height, 1, 1, color_format, 1, api::memory_heap::gpu_only, api::resource_usage::copy_dest | api::resource_usage::shader_resource),
+			api::resource_desc(width, height, 1, 1, color_format_typeless, 1, api::memory_heap::gpu_only, api::resource_usage::copy_dest | api::resource_usage::shader_resource),
 			nullptr, api::resource_usage::shader_resource, &_effect_color_tex))
 	{
-		LOG(ERROR) << "Failed to create effect color resource (width = " << width << ", height = " << height << ", format = " << static_cast<uint32_t>(color_format) << ")!";
+		LOG(ERROR) << "Failed to create effect color resource (width = " << width << ", height = " << height << ", format = " << static_cast<uint32_t>(color_format_typeless) << ")!";
 		return false;
 	}
 
 #if RESHADE_ADDON
 	// Reload effects to update 'BUFFER_WIDTH', 'BUFFER_HEIGHT' and 'BUFFER_COLOR_BIT_DEPTH' definitions (unless this is the 'update_effect_color_and_stencil_tex' call in 'on_init')
-	const bool force_reload = _is_initialized && (width != _effect_width || height != _effect_height || format_color_bit_depth(color_format) != format_color_bit_depth(_effect_color_format));
+	const bool force_reload = _is_initialized && (width != _effect_width || height != _effect_height || format_color_bit_depth(color_format_typeless) != format_color_bit_depth(_effect_color_format));
 #endif
 
 	_effect_width = width;
 	_effect_height = height;
-	_effect_color_format = color_format;
+	_effect_color_format = color_format_typeless;
 
 	_device->set_resource_name(_effect_color_tex, "ReShade back buffer");
 
@@ -4113,9 +4067,13 @@ void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource
 		if (back_buffer_desc.texture.samples > 1)
 			return; // Multisampled render targets are not supported
 
+		api::format color_format = back_buffer_desc.texture.format;
+		if (api::format_to_typeless(color_format) == color_format)
+			color_format = _device->get_resource_view_desc(rtv).format;
+
 		// Ensure dimensions and format of the effect color resource matches that of the input back buffer resource (so that the copy to the effect color resource succeeds)
 		// Changing dimensions or format can cause effects to be reloaded, in which case need to wait for that to finish before rendering
-		if (!update_effect_color_and_stencil_tex(back_buffer_desc.texture.width, back_buffer_desc.texture.height, back_buffer_desc.texture.format, _effect_stencil_format))
+		if (!update_effect_color_and_stencil_tex(back_buffer_desc.texture.width, back_buffer_desc.texture.height, color_format, _effect_stencil_format))
 			return;
 	}
 
@@ -4470,51 +4428,61 @@ void reshade::runtime::update_texture(texture &tex, uint32_t width, uint32_t hei
 		return;
 	}
 
-	int type_size;
-	int num_channels;
+	uint32_t pixel_size;
+	stbir_datatype data_type;
+	stbir_pixel_layout pixel_layout;
 	switch (tex.format)
 	{
 	case reshadefx::texture_format::r8:
-		type_size = 1;
-		num_channels = 1;
+		pixel_size = 1 * 1;
+		data_type = STBIR_TYPE_UINT8;
+		pixel_layout = STBIR_1CHANNEL;
 		break;
-	case reshadefx::texture_format::r16:
-	case reshadefx::texture_format::r16f:
-		type_size = 2;
-		num_channels = 1;
-		break;
-	case reshadefx::texture_format::r32i:
-	case reshadefx::texture_format::r32u:
 	case reshadefx::texture_format::r32f:
-		type_size = 4;
-		num_channels = 1;
+		pixel_size = 4 * 1;
+		data_type = STBIR_TYPE_FLOAT;
+		pixel_layout = STBIR_1CHANNEL;
 		break;
 	case reshadefx::texture_format::rg8:
-		type_size = 1;
-		num_channels = 2;
+		pixel_size = 1 * 2;
+		data_type = STBIR_TYPE_UINT8;
+		pixel_layout = STBIR_2CHANNEL;
 		break;
 	case reshadefx::texture_format::rg16:
+		pixel_size = 2 * 2;
+		data_type = STBIR_TYPE_UINT16;
+		pixel_layout = STBIR_2CHANNEL;
+		break;
 	case reshadefx::texture_format::rg16f:
-		type_size = 2;
-		num_channels = 1;
+		pixel_size = 2 * 2;
+		data_type = STBIR_TYPE_HALF_FLOAT;
+		pixel_layout = STBIR_2CHANNEL;
 		break;
 	case reshadefx::texture_format::rg32f:
-		type_size = 4;
-		num_channels = 2;
+		pixel_size = 4 * 2;
+		data_type = STBIR_TYPE_FLOAT;
+		pixel_layout = STBIR_2CHANNEL;
 		break;
 	case reshadefx::texture_format::rgba8:
 	case reshadefx::texture_format::rgb10a2:
-		type_size = 1;
-		num_channels = 4;
+		pixel_size = 1 * 4;
+		data_type = STBIR_TYPE_UINT8;
+		pixel_layout = STBIR_RGBA;
 		break;
 	case reshadefx::texture_format::rgba16:
+		pixel_size = 2 * 4;
+		data_type = STBIR_TYPE_UINT16;
+		pixel_layout = STBIR_RGBA;
+		break;
 	case reshadefx::texture_format::rgba16f:
-		type_size = 2;
-		num_channels = 4;
+		pixel_size = 2 * 4;
+		data_type = STBIR_TYPE_HALF_FLOAT;
+		pixel_layout = STBIR_RGBA;
 		break;
 	case reshadefx::texture_format::rgba32f:
-		type_size = 4;
-		num_channels = 4;
+		pixel_size = 4 * 4;
+		data_type = STBIR_TYPE_FLOAT;
+		pixel_layout = STBIR_RGBA;
 		break;
 	default:
 		return;
@@ -4528,21 +4496,14 @@ void reshade::runtime::update_texture(texture &tex, uint32_t width, uint32_t hei
 	{
 		LOG(INFO) << "Resizing image data for texture '" << tex.unique_name << "' from " << width << "x" << height << " to " << tex.width << "x" << tex.height << '.';
 
-		resized.resize(static_cast<size_t>(tex.width) * static_cast<size_t>(tex.height) * static_cast<size_t>(tex.depth) * static_cast<size_t>(type_size * num_channels));
+		resized.resize(static_cast<size_t>(tex.width) * static_cast<size_t>(tex.height) * static_cast<size_t>(tex.depth) * static_cast<size_t>(pixel_size));
 
-		if (type_size == 4)
-			stbir_resize_float(static_cast<const float *>(pixels), width, height, 0, reinterpret_cast<float *>(resized.data()), tex.width, tex.height, 0, num_channels);
-		else if (type_size == 2)
-			stbir_resize_uint16_generic(static_cast<const uint16_t *>(pixels), width, height, 0, reinterpret_cast<uint16_t *>(resized.data()), tex.width, tex.height, 0, num_channels, -1, 0, STBIR_EDGE_CLAMP, STBIR_FILTER_DEFAULT, STBIR_COLORSPACE_LINEAR, nullptr);
-		else
-			stbir_resize_uint8(static_cast<const uint8_t *>(pixels), width, height, 0, resized.data(), tex.width, tex.height, 0, num_channels);
-
-		upload_data = resized.data();
+		upload_data = stbir_resize(pixels, width, height, 0, resized.data(), tex.width, tex.height, 0, pixel_layout, data_type, STBIR_EDGE_CLAMP, STBIR_FILTER_DEFAULT);
 	}
 
 	api::command_list *const cmd_list = _graphics_queue->get_immediate_command_list();
 	cmd_list->barrier(tex.resource, api::resource_usage::shader_resource, api::resource_usage::copy_dest);
-	_device->update_texture_region({ upload_data, tex.width * static_cast<uint32_t>(type_size * num_channels), tex.width * tex.height * static_cast<uint32_t>(type_size * num_channels) }, tex.resource, 0);
+	_device->update_texture_region({ upload_data, tex.width * pixel_size, tex.width * tex.height * pixel_size }, tex.resource, 0);
 	cmd_list->barrier(tex.resource, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
 
 	if (tex.levels > 1)
@@ -5085,9 +5046,10 @@ bool reshade::runtime::get_texture_data(api::resource resource, api::resource_us
 	cmd_list->copy_texture_region(resource, 0, nullptr, intermediate, 0, nullptr);
 	cmd_list->barrier(resource, api::resource_usage::copy_source, state);
 
-	// Wait for any rendering by the application finish before submitting
-	// It may have submitted that to a different queue, so simply wait for all to idle here
-	_graphics_queue->wait_idle();
+	api::fence copy_sync_fence = {};
+	if (!_device->create_fence(0, api::fence_flags::none, &copy_sync_fence) || !_graphics_queue->signal(copy_sync_fence, 1) || !_device->wait(copy_sync_fence, 1))
+		_graphics_queue->wait_idle();
+	_device->destroy_fence(copy_sync_fence);
 
 	// Copy data from intermediate image into output buffer
 	api::subresource_data mapped_data = {};

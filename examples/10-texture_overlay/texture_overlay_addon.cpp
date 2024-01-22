@@ -307,9 +307,12 @@ static bool save_texture_image(command_queue *queue, resource tex, const resourc
 		cmd_list->barrier(tex, resource_usage::shader_resource, resource_usage::copy_source);
 		cmd_list->copy_texture_region(tex, 0, nullptr, intermediate, 0, nullptr);
 		cmd_list->barrier(tex, resource_usage::copy_source, resource_usage::shader_resource);
-	}
 
-	queue->wait_idle();
+		fence copy_sync_fence = {};
+		if (!device->create_fence(0, fence_flags::none, &copy_sync_fence) || !queue->signal(copy_sync_fence, 1) || !device->wait(copy_sync_fence, 1))
+			queue->wait_idle();
+		device->destroy_fence(copy_sync_fence);
+	}
 
 	subresource_data mapped_data = {};
 	if (device->map_texture_region(intermediate, 0, nullptr, map_access::read_only, &mapped_data))
@@ -334,16 +337,16 @@ static void draw_overlay(effect_runtime *runtime)
 
 	ImGui::Checkbox("Show only used this frame", &data.filter);
 
-	const bool save_all_textures = ImGui::Button("Save All", ImVec2(ImGui::GetWindowContentRegionWidth(), 0));
+	const bool save_all_textures = ImGui::Button("Save All", ImVec2(ImGui::GetContentRegionAvail().x, 0));
 
 	ImGui::TextUnformatted("You can hover over a texture below with the mouse cursor to replace it with green.");
 	ImGui::TextUnformatted("Clicking one will save it as an image to disk.");
 
-	ImGui::PushItemWidth(ImGui::GetWindowContentRegionWidth());
+	ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 	ImGui::SliderFloat("##scale", &data.scale, 0.01f, 2.0f, "%.3f", ImGuiSliderFlags_NoInput);
 	ImGui::PopItemWidth();
 
-	const auto total_width = ImGui::GetWindowContentRegionWidth();
+	const auto total_width = ImGui::GetContentRegionAvail().x;
 	const auto num_columns = static_cast<unsigned int>(std::ceilf(total_width / (50.0f * data.scale * 13)));
 	const auto single_image_max_size = (total_width / num_columns) - 5.0f;
 
